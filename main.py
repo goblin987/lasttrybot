@@ -78,6 +78,7 @@ from admin import (
     handle_adm_edit_type_menu, handle_adm_change_type_emoji,
     handle_adm_manage_discounts, handle_adm_toggle_discount, handle_adm_delete_discount,
     handle_adm_add_discount_start, handle_adm_use_generated_code, handle_adm_set_discount_type,
+    handle_adm_discount_code_message, handle_adm_discount_value_message,
     handle_adm_set_media,
     handle_adm_broadcast_start, handle_cancel_broadcast,
     handle_confirm_broadcast,
@@ -231,6 +232,8 @@ def callback_query_router(func):
                 "adm_manage_discounts": admin.handle_adm_manage_discounts, "adm_toggle_discount": admin.handle_adm_toggle_discount,
                 "adm_delete_discount": admin.handle_adm_delete_discount, "adm_add_discount_start": admin.handle_adm_add_discount_start,
                 "adm_use_generated_code": admin.handle_adm_use_generated_code, "adm_set_discount_type": admin.handle_adm_set_discount_type,
+                "adm_discount_code_message": admin.handle_adm_discount_code_message,
+                "adm_discount_value_message": admin.handle_adm_discount_value_message,
                 "adm_set_media": admin.handle_adm_set_media,
                 "adm_clear_reservations_confirm": admin.handle_adm_clear_reservations_confirm,
                 "confirm_yes": admin.handle_confirm_yes,
@@ -342,6 +345,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'awaiting_custom_size': admin.handle_adm_custom_size_message,
         'awaiting_drop_details': admin.handle_adm_drop_details_message,
         'awaiting_price': admin.handle_adm_price_message,
+        # Discount code message handlers
+        'awaiting_discount_code': admin.handle_adm_discount_code_message,
+        'awaiting_discount_value': admin.handle_adm_discount_value_message,
         # Product type message handlers
         'awaiting_new_type_name': admin.handle_adm_new_type_name_message,
         'awaiting_new_type_emoji': admin.handle_adm_new_type_emoji_message,

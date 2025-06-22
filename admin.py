@@ -795,10 +795,15 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
                     temp_file_path = media_item["path"]
                     if await asyncio.to_thread(os.path.exists, temp_file_path):
                         new_filename = os.path.basename(temp_file_path); final_persistent_path = os.path.join(final_media_dir, new_filename)
-                        try: await asyncio.to_thread(shutil.move, temp_file_path, final_persistent_path); media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
-                        except OSError as move_err: logger.error(f"Error moving media {temp_file_path}: {move_err}")
-                    else: logger.warning(f"Temp media not found: {temp_file_path}")
-                else: logger.warning(f"Incomplete media item: {media_item}")
+                        try:
+                            await asyncio.to_thread(shutil.copy2, temp_file_path, final_persistent_path)
+                            media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
+                        except OSError as move_err:
+                            logger.error(f"Error copying media {temp_file_path}: {move_err}")
+                    else:
+                        logger.warning(f"Temp media not found: {temp_file_path}")
+                else:
+                    logger.warning(f"Incomplete media item: {media_item}")
             if media_inserts: c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
 
         conn.commit(); logger.info(f"Added product {product_id} ({product_name}).")
@@ -2185,6 +2190,179 @@ async def handle_adm_use_generated_code(update: Update, context: ContextTypes.DE
     await process_discount_code_input(update, context, code_text) # This function will handle message editing
 
 
+async def process_discount_code_input(update, context, code_text):
+    """Processes discount code input and moves to type selection."""
+    query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        if query:
+            await query.answer("Access Denied.", show_alert=True)
+        return
+    
+    # Validate code
+    if not code_text or not code_text.strip():
+        error_msg = "❌ Code cannot be empty."
+        if query:
+            await query.edit_message_text(error_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="adm_manage_discounts")]]), parse_mode=None)
+        else:
+            await send_message_with_retry(context.bot, chat_id, error_msg, parse_mode=None)
+        return
+    
+    code_text = code_text.strip()
+    
+    # Check if code already exists
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT code FROM discount_codes WHERE UPPER(code) = ?", (code_text.upper(),))
+        existing = c.fetchone()
+        if existing:
+            error_msg = f"❌ Code '{code_text}' already exists. Please choose a different one."
+            if query:
+                keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="adm_add_discount_start")]]
+                await query.edit_message_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+            else:
+                await send_message_with_retry(context.bot, chat_id, error_msg, parse_mode=None)
+            return
+    except sqlite3.Error as e:
+        logger.error(f"DB error checking existing discount codes: {e}")
+        error_msg = "❌ Database error. Please try again."
+        if query:
+            await query.edit_message_text(error_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="adm_manage_discounts")]]), parse_mode=None)
+        else:
+            await send_message_with_retry(context.bot, chat_id, error_msg, parse_mode=None)
+        return
+    finally:
+        if conn:
+            conn.close()
+    
+    # Store code and move to type selection
+    context.user_data['new_discount_info'] = {'code': code_text}
+    context.user_data['state'] = 'awaiting_discount_type'
+    
+    msg = f"Code: {code_text}\n\nSelect discount type:"
+    keyboard = [
+        [InlineKeyboardButton("📊 Percentage", callback_data="adm_set_discount_type|percentage")],
+        [InlineKeyboardButton("💰 Fixed Amount", callback_data="adm_set_discount_type|fixed")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_discounts")]
+    ]
+    
+    if query:
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.answer()
+    else:
+        await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+
+async def handle_adm_discount_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles admin entering a discount code via message."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    if user_id != ADMIN_ID:
+        return
+        
+    if context.user_data.get("state") != 'awaiting_discount_code':
+        return
+        
+    if not update.message or not update.message.text:
+        await send_message_with_retry(context.bot, chat_id, "Please send the code as text.", parse_mode=None)
+        return
+    
+    code_text = update.message.text.strip()
+    context.user_data.pop('state', None)  # Clear state
+    
+    await process_discount_code_input(update, context, code_text)
+
+
+async def handle_adm_discount_value_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles admin entering discount value via message."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    if user_id != ADMIN_ID:
+        return
+        
+    if context.user_data.get("state") != 'awaiting_discount_value':
+        return
+        
+    if not update.message or not update.message.text:
+        await send_message_with_retry(context.bot, chat_id, "Please send the value as text.", parse_mode=None)
+        return
+    
+    value_text = update.message.text.strip()
+    discount_info = context.user_data.get('new_discount_info', {})
+    
+    if not discount_info.get('code') or not discount_info.get('type'):
+        await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start again.", parse_mode=None)
+        context.user_data.pop('state', None)
+        context.user_data.pop('new_discount_info', None)
+        keyboard = [[InlineKeyboardButton("⬅️ Back to Discounts", callback_data="adm_manage_discounts")]]
+        await send_message_with_retry(context.bot, chat_id, "Returning to discount management.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        return
+    
+    # Validate value
+    try:
+        value = float(value_text)
+        if value <= 0:
+            await send_message_with_retry(context.bot, chat_id, "❌ Value must be greater than 0.", parse_mode=None)
+            return
+            
+        if discount_info['type'] == 'percentage' and value > 100:
+            await send_message_with_retry(context.bot, chat_id, "❌ Percentage cannot exceed 100%.", parse_mode=None)
+            return
+            
+        if discount_info['type'] == 'fixed' and value > 10000:
+            await send_message_with_retry(context.bot, chat_id, "❌ Fixed amount too high (max 10000).", parse_mode=None)
+            return
+            
+    except ValueError:
+        await send_message_with_retry(context.bot, chat_id, "❌ Invalid number format. Please enter a valid number.", parse_mode=None)
+        return
+    
+    # Save the discount code
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Insert new discount code
+        c.execute("""
+            INSERT INTO discount_codes (code, discount_type, value, is_active, max_uses, uses_count, created_date)
+            VALUES (?, ?, ?, 1, NULL, 0, ?)
+        """, (discount_info['code'], discount_info['type'], value, datetime.now(timezone.utc).isoformat()))
+        
+        conn.commit()
+        
+        # Success message
+        value_str = format_discount_value(discount_info['type'], value)
+        success_msg = f"✅ Discount code created successfully!\n\nCode: {discount_info['code']}\nType: {discount_info['type'].capitalize()}\nValue: {value_str}"
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Back to Discounts", callback_data="adm_manage_discounts")]]
+        await send_message_with_retry(context.bot, chat_id, success_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        
+        logger.info(f"Admin {user_id} created discount code '{discount_info['code']}' ({discount_info['type']}: {value})")
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error creating discount code: {e}", exc_info=True)
+        await send_message_with_retry(context.bot, chat_id, "❌ Database error creating discount code.", parse_mode=None)
+        
+    except Exception as e:
+        logger.error(f"Unexpected error creating discount code: {e}", exc_info=True)
+        await send_message_with_retry(context.bot, chat_id, "❌ An unexpected error occurred.", parse_mode=None)
+        
+    finally:
+        if conn:
+            conn.close()
+        
+        # Clean up state
+        context.user_data.pop('state', None)
+        context.user_data.pop('new_discount_info', None)
+
+
 async def handle_adm_set_discount_type(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Sets the discount type and asks for the value."""
     query = update.callback_query
@@ -3240,7 +3418,7 @@ async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TY
         if query:
              await handle_adm_manage_welcome(update, context, params=["0"])
         return
-
+    
     template_name = pending_template['name']
     template_text = pending_template.get('text', '') # Use get with fallback
     template_description = pending_template.get('description', 'Not set')
@@ -3924,10 +4102,10 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
                     conn.rollback()
                 except Exception as rb_err:
                     logger.error(f"Rollback failed: {rb_err}")
-        finally:
-            if conn:
-                conn.close()
-            
+    finally:
+        if conn:
+            conn.close()
+    
             # Clean up temp directory for this message
             if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
                 await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
@@ -4111,13 +4289,13 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
     if not user_id or not chat_id or not media_group_id:
         logger.error(f"Bulk job _process_bulk_collected_media missing user_id, chat_id, or media_group_id in data: {job_data}")
         return
-
+        
     logger.info(f"BULK JOB DEBUG: Processing media group {media_group_id} for user {user_id}")
     user_data = context.application.user_data.get(user_id, {})
     if not user_data:
         logger.error(f"BULK JOB DEBUG: Could not find user_data for user {user_id}")
         return
-
+        
     collected_info = user_data.get('bulk_collected_media', {}).get(media_group_id)
     if not collected_info or 'media' not in collected_info:
         logger.warning(f"BULK JOB DEBUG: No collected media info found for group {media_group_id}. User might have cancelled or group already processed.")
@@ -4127,7 +4305,7 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
             if not user_data['bulk_collected_media']:
                 user_data.pop('bulk_collected_media', None)
         return
-
+    
     collected_media = collected_info.get('media', [])
     caption = collected_info.get('caption', '')
     
@@ -4182,7 +4360,7 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
             "❌ You've already collected 10 messages (maximum). Please finish creating the products or cancel the operation.", 
             parse_mode=None)
         return
-
+        
     media_group_id = update.message.media_group_id
     job_name = f"process_bulk_media_group_{user_id}_{media_group_id}" if media_group_id else None
 
@@ -4234,8 +4412,8 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
     else:
         if context.user_data.get('bulk_collecting_media_group_id'):
             logger.warning(f"BULK DEBUG: Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
-            return
-
+        return
+        
         logger.info(f"BULK DEBUG: Received single bulk message (or text only) from user {user_id}. Adding as individual message.")
         context.user_data.pop('bulk_collecting_media_group_id', None)
         context.user_data.pop('bulk_collected_media', None)
@@ -4293,16 +4471,16 @@ async def handle_adm_search_username_message(update: Update, context: ContextTyp
         return
     if context.user_data.get("state") != 'awaiting_search_username': 
         return
-    if not update.message or not update.message.text: 
+    if not update.message or not update.message.text:
         return
-
+    
     search_term = update.message.text.strip()
     
     # Remove @ symbol if present
     if search_term.startswith('@'):
         search_term = search_term[1:]
     
-    # Clear state
+        # Clear state
     context.user_data.pop('state', None)
     
     # Try to find user by username or user ID
@@ -4333,7 +4511,7 @@ async def handle_adm_search_username_message(update: Update, context: ContextTyp
     except sqlite3.Error as e:
         logger.error(f"DB error searching for user '{search_term}': {e}")
         await send_message_with_retry(context.bot, chat_id, "❌ Database error during search.", parse_mode=None)
-        return
+            return
     finally:
         if conn: 
             conn.close()
@@ -4358,8 +4536,8 @@ async def handle_adm_search_username_message(update: Update, context: ContextTyp
             reply_markup=InlineKeyboardMarkup(keyboard), 
             parse_mode=None
         )
-        return
-    
+            return
+            
     # User found - display comprehensive information
     await display_user_search_results(context.bot, chat_id, user_info)
 
@@ -4400,7 +4578,7 @@ async def display_user_search_results(bot, chat_id: int, user_info: dict):
     except sqlite3.Error as e:
         logger.error(f"DB error fetching user overview for {user_id}: {e}", exc_info=True)
         await send_message_with_retry(bot, chat_id, "❌ Error fetching user details.", parse_mode=None)
-        return
+            return
     finally:
         if conn: 
             conn.close()
@@ -4774,9 +4952,9 @@ async def handle_adm_user_discounts(update: Update, context: ContextTypes.DEFAUL
         await query.answer("Database error.", show_alert=True)
         return
     finally:
-        if conn: 
+        if conn:
             conn.close()
-    
+        
     msg = f"🏷️ Reseller Discounts - @{username}\n\n"
     
     if not discounts:
