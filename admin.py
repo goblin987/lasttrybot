@@ -3831,3 +3831,814 @@ async def display_user_search_results(bot, chat_id: int, user_info: dict):
     keyboard.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_menu")])
     
     await send_message_with_retry(bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+
+# --- Missing Functions That Were Accidentally Removed ---
+
+async def handle_adm_bulk_back_to_messages(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Returns to the message collection interface."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
+    
+    context.user_data["state"] = "awaiting_bulk_messages"
+    await show_bulk_messages_status(update, context)
+
+async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Executes the bulk product creation from collected messages."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
+    
+    chat_id = query.message.chat_id
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    
+    # Get setup data
+    city = context.user_data.get("bulk_admin_city", "")
+    district = context.user_data.get("bulk_admin_district", "")
+    p_type = context.user_data.get("bulk_admin_product_type", "")
+    size = context.user_data.get("bulk_pending_drop_size", "")
+    price = context.user_data.get("bulk_pending_drop_price", 0)
+    
+    if not bulk_messages or not all([city, district, p_type, size, price]):
+        return await query.edit_message_text("❌ Error: Missing data. Please start again.", parse_mode=None)
+    
+    await query.edit_message_text("⏳ Creating bulk products...", parse_mode=None)
+    
+    created_count = 0
+    failed_count = 0
+    
+    # Process each message as a separate product
+    for i, message_data in enumerate(bulk_messages):
+        text_content = message_data.get("text", "")
+        media_list = message_data.get("media", [])
+        
+        # Create unique product name
+        product_name = f"{p_type} {size} {int(time.time())}_{i+1}"
+        
+        conn = None
+        product_id = None
+        temp_dir = None
+        
+        try:
+            # Download media if present
+            if media_list:
+                import tempfile
+                temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="bulk_msg_media_")
+                
+                for j, media_item in enumerate(media_list):
+                    try:
+                        file_obj = await context.bot.get_file(media_item["file_id"])
+                        file_extension = os.path.splitext(file_obj.file_path)[1] if file_obj.file_path else ""
+                        if not file_extension:
+                            if media_item["type"] == "photo": file_extension = ".jpg"
+                            elif media_item["type"] == "video": file_extension = ".mp4"
+                            elif media_item["type"] == "animation": file_extension = ".gif"
+                            else: file_extension = ".bin"
+                        
+                        temp_file_path = os.path.join(temp_dir, f"media_{j}_{int(time.time())}{file_extension}")
+                        await file_obj.download_to_drive(temp_file_path)
+                        media_item["path"] = temp_file_path
+                    except Exception as e:
+                        logger.error(f"Error downloading media for bulk message {i+1}: {e}")
+                        failed_count += 1
+            
+            # Create product in database
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("BEGIN")
+            
+            insert_params = (
+                city, district, p_type, size, product_name, price, text_content, ADMIN_ID, datetime.now(timezone.utc).isoformat()
+            )
+            
+            c.execute("""INSERT INTO products
+                            (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
+                         VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""", insert_params)
+            product_id = c.lastrowid
+            
+            # Handle media for this product
+            if product_id and media_list and temp_dir:
+                final_media_dir = os.path.join(MEDIA_DIR, str(product_id))
+                await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True)
+                
+                media_inserts = []
+                for media_item in media_list:
+                    if "path" in media_item and "type" in media_item and "file_id" in media_item:
+                        temp_file_path = media_item["path"]
+                        if await asyncio.to_thread(os.path.exists, temp_file_path):
+                            new_filename = os.path.basename(temp_file_path)
+                            final_persistent_path = os.path.join(final_media_dir, new_filename)
+                            try:
+                                await asyncio.to_thread(shutil.move, temp_file_path, final_persistent_path)
+                                media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
+                            except OSError as move_err:
+                                logger.error(f"Error moving media {temp_file_path}: {move_err}")
+                        else:
+                            logger.warning(f"Temp media not found: {temp_file_path}")
+                    else:
+                        logger.warning(f"Incomplete media item: {media_item}")
+                
+                if media_inserts:
+                    c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
+            
+            conn.commit()
+            created_count += 1
+            logger.info(f"Bulk created product {product_id} ({product_name}) from message {i+1}")
+            
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Error creating bulk product from message {i+1}: {e}", exc_info=True)
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception as rb_err:
+                    logger.error(f"Rollback failed: {rb_err}")
+        finally:
+            if conn:
+                conn.close()
+            
+            # Clean up temp directory for this message
+            if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
+                await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
+    
+    # Clear bulk data from context
+    keys_to_clear = ["bulk_messages", "bulk_admin_city_id", "bulk_admin_district_id", 
+                     "bulk_admin_product_type", "bulk_admin_city", "bulk_admin_district", 
+                     "bulk_pending_drop_size", "bulk_pending_drop_price", "state"]
+    for key in keys_to_clear:
+        context.user_data.pop(key, None)
+    
+    # Show results
+    type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    result_msg = f"✅ Bulk Operation Complete!\n\n"
+    result_msg += f"📍 Location: {city} / {district}\n"
+    result_msg += f"{type_emoji} Product: {p_type} {size}\n"
+    result_msg += f"💰 Price: {format_currency(price)}€\n\n"
+    result_msg += f"📊 Results:\n"
+    result_msg += f"✅ Created: {created_count} products\n"
+    if failed_count > 0:
+        result_msg += f"❌ Failed: {failed_count}\n"
+    result_msg += f"\nEach message became a separate product drop in the same category!"
+    
+    keyboard = [
+        [InlineKeyboardButton("📦 Add More Bulk Products", callback_data="adm_bulk_city")],
+        [InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), 
+         InlineKeyboardButton("🏠 User Home", callback_data="back_start")]
+    ]
+    
+    await send_message_with_retry(context.bot, chat_id, result_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+# Product type message handlers
+async def handle_adm_new_type_name_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles new product type name input."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    type_name = update.message.text.strip()
+    if not type_name:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a valid type name.", parse_mode=None)
+        return
+    
+    # Check if type already exists
+    load_all_data()
+    if type_name in PRODUCT_TYPES:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            f"❌ Product type '{type_name}' already exists. Please choose a different name.", parse_mode=None)
+        return
+    
+    # Store the type name and ask for emoji
+    context.user_data["new_type_name"] = type_name
+    context.user_data["state"] = "awaiting_new_type_emoji"
+    
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_types")]]
+    await send_message_with_retry(context.bot, update.effective_chat.id, 
+        f"🧩 Product Type: {type_name}\n\n"
+        "✍️ Please reply with a single emoji for this product type:", 
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_new_type_emoji_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles new product type emoji input."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    emoji = update.message.text.strip()
+    if not emoji:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a valid emoji.", parse_mode=None)
+        return
+    
+    # Basic emoji validation (check if it's a single character or emoji)
+    if len(emoji) > 4:  # Allow for multi-byte emojis
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter only a single emoji.", parse_mode=None)
+        return
+    
+    # Store the emoji and ask for description
+    context.user_data["new_type_emoji"] = emoji
+    context.user_data["state"] = "awaiting_new_type_description"
+    
+    type_name = context.user_data.get("new_type_name", "Unknown")
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_types")]]
+    await send_message_with_retry(context.bot, update.effective_chat.id, 
+        f"🧩 Product Type: {emoji} {type_name}\n\n"
+        "📝 Please reply with a description for this product type (or send 'skip' to leave empty):", 
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_new_type_description_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles new product type description input and creates the type."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    description = update.message.text.strip()
+    if description.lower() == 'skip':
+        description = None
+    elif not description:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a description or send 'skip' to leave empty.", parse_mode=None)
+        return
+    
+    type_name = context.user_data.get("new_type_name")
+    emoji = context.user_data.get("new_type_emoji")
+    
+    if not type_name or not emoji:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Error: Missing type name or emoji. Please start over.", parse_mode=None)
+        context.user_data.pop("state", None)
+        return
+    
+    # Save to database
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO product_types (name, emoji, description) VALUES (?, ?, ?)", 
+                  (type_name, emoji, description))
+        conn.commit()
+        load_all_data()  # Reload data
+        
+        context.user_data.pop("state", None)
+        context.user_data.pop("new_type_name", None)
+        context.user_data.pop("new_type_emoji", None)
+        
+        log_admin_action(admin_id=update.effective_user.id, action="PRODUCT_TYPE_ADD", 
+                        reason=f"Added type '{type_name}' with emoji '{emoji}'", 
+                        new_value=type_name)
+        
+        # Create the manage types keyboard to show the updated list
+        keyboard = []
+        for existing_type_name, existing_emoji in sorted(PRODUCT_TYPES.items()):
+            keyboard.append([
+                InlineKeyboardButton(f"{existing_emoji} {existing_type_name}", callback_data=f"adm_edit_type_menu|{existing_type_name}"),
+                InlineKeyboardButton(f"🗑️ Delete", callback_data=f"adm_delete_type|{existing_type_name}")
+            ])
+        keyboard.extend([
+            [InlineKeyboardButton("➕ Add New Type", callback_data="adm_add_type")],
+            [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")]
+        ])
+        
+        success_msg = f"✅ Product type '{emoji} {type_name}' created successfully!"
+        if description:
+            success_msg += f"\nDescription: {description}"
+        success_msg += "\n\n🧩 Manage Product Types\n\nSelect a type to edit or delete:"
+        
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            success_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error creating product type '{type_name}': {e}", exc_info=True)
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Database error creating product type. Please try again.", parse_mode=None)
+        context.user_data.pop("state", None)
+    finally:
+        if conn: conn.close()
+
+async def handle_adm_edit_type_emoji_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles editing product type emoji input."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    emoji = update.message.text.strip()
+    if not emoji:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a valid emoji.", parse_mode=None)
+        return
+    
+    # Basic emoji validation
+    if len(emoji) > 4:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter only a single emoji.", parse_mode=None)
+        return
+    
+    type_name = context.user_data.get("edit_type_name")
+    if not type_name:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Error: Type name not found. Please start over.", parse_mode=None)
+        context.user_data.pop("state", None)
+        return
+    
+    # Update emoji in database
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE product_types SET emoji = ? WHERE name = ?", (emoji, type_name))
+        
+        if c.rowcount > 0:
+            conn.commit()
+            load_all_data()  # Reload data
+            
+            context.user_data.pop("state", None)
+            context.user_data.pop("edit_type_name", None)
+            
+            log_admin_action(admin_id=update.effective_user.id, action="PRODUCT_TYPE_EDIT", 
+                            reason=f"Changed emoji for type '{type_name}' to '{emoji}'", 
+                            old_value=type_name, new_value=f"{emoji} {type_name}")
+            
+            # Show updated type info
+            current_description = ""
+            c.execute("SELECT description FROM product_types WHERE name = ?", (type_name,))
+            res = c.fetchone()
+            if res: current_description = res['description'] or "(Description not set)"
+            
+            keyboard = [
+                [InlineKeyboardButton("✏️ Change Emoji", callback_data=f"adm_change_type_emoji|{type_name}")],
+                [InlineKeyboardButton("🗑️ Delete Type", callback_data=f"adm_delete_type|{type_name}")],
+                [InlineKeyboardButton("⬅️ Back to Manage Types", callback_data="adm_manage_types")]
+            ]
+            
+            await send_message_with_retry(context.bot, update.effective_chat.id, 
+                f"✅ Emoji updated successfully!\n\n"
+                f"🧩 Editing Type: {type_name}\n\n"
+                f"Current Emoji: {emoji}\n"
+                f"Description: {current_description}\n\n"
+                f"What would you like to do?", 
+                reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        else:
+            await send_message_with_retry(context.bot, update.effective_chat.id, 
+                f"❌ Error: Product type '{type_name}' not found.", parse_mode=None)
+            context.user_data.pop("state", None)
+    except sqlite3.Error as e:
+        logger.error(f"DB error updating emoji for type '{type_name}': {e}", exc_info=True)
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Database error updating emoji. Please try again.", parse_mode=None)
+        context.user_data.pop("state", None)
+    finally:
+        if conn: conn.close()
+
+# User search handlers
+async def handle_adm_search_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Starts the user search process by prompting for username."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    context.user_data['state'] = 'awaiting_search_username'
+    
+    prompt_msg = (
+        "🔍 Search User by Username or ID\n\n"
+        "Please reply with the Telegram username (with or without @) or User ID of the person you want to search for.\n\n"
+        "Examples:\n"
+        "• @username123 or username123\n"
+        "• 123456789 (User ID)"
+    )
+    
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="admin_menu")]]
+    
+    await query.edit_message_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter username or User ID in chat.")
+
+async def handle_adm_search_username_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin entering a username or User ID for search."""
+    admin_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    if admin_id != ADMIN_ID: 
+        return
+    if context.user_data.get("state") != 'awaiting_search_username': 
+        return
+    if not update.message or not update.message.text:
+        return
+    
+    search_term = update.message.text.strip()
+    
+    # Remove @ symbol if present
+    if search_term.startswith('@'):
+        search_term = search_term[1:]
+    
+    # Clear state
+    context.user_data.pop('state', None)
+    
+    # Try to find user by username or user ID
+    conn = None
+    user_info = None
+    search_by_id = False
+    
+    try:
+        # Check if search term is a number (User ID)
+        try:
+            user_id_search = int(search_term)
+            search_by_id = True
+        except ValueError:
+            search_by_id = False
+        
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        if search_by_id:
+            # Search by User ID
+            c.execute("SELECT user_id, username, balance, total_purchases, is_banned, is_reseller FROM users WHERE user_id = ?", (user_id_search,))
+        else:
+            # Search by username (case insensitive)
+            c.execute("SELECT user_id, username, balance, total_purchases, is_banned, is_reseller FROM users WHERE LOWER(username) = LOWER(?)", (search_term,))
+        
+        user_info = c.fetchone()
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error searching for user '{search_term}': {e}")
+        await send_message_with_retry(context.bot, chat_id, "❌ Database error during search.", parse_mode=None)
+        return
+    finally:
+        if conn: 
+            conn.close()
+    
+    if not user_info:
+        search_type = "User ID" if search_by_id else "username"
+        await send_message_with_retry(
+            context.bot, chat_id, 
+            f"❌ No user found with {search_type}: {search_term}\n\nPlease check the spelling or try a different search term.",
+            parse_mode=None
+        )
+        
+        # Offer to search again
+        keyboard = [
+            [InlineKeyboardButton("🔍 Search Again", callback_data="adm_search_user_start")],
+            [InlineKeyboardButton("👥 Browse All Users", callback_data="adm_manage_users|0")],
+            [InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_menu")]
+        ]
+        await send_message_with_retry(
+            context.bot, chat_id, 
+            "What would you like to do?", 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=None
+        )
+        return
+            
+    # User found - display comprehensive information
+    await display_user_search_results(context.bot, chat_id, user_info)
+
+# Detailed User Information Handlers
+async def handle_adm_user_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows detailed pending deposits for a user."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or not params[0].isdigit():
+        return await query.answer("Error: Invalid user ID.", show_alert=True)
+    
+    user_id = int(params[0])
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Get user info
+        c.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
+        user_result = c.fetchone()
+        if not user_result:
+            return await query.answer("User not found.", show_alert=True)
+        
+        username = user_result['username'] or f"ID_{user_id}"
+        
+        # Get all pending deposits
+        c.execute("""
+            SELECT payment_id, currency, target_eur_amount, expected_crypto_amount, created_at, is_purchase
+            FROM pending_deposits 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC
+        """, (user_id,))
+        deposits = c.fetchall()
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching deposits for user {user_id}: {e}", exc_info=True)
+        await query.answer("Database error.", show_alert=True)
+        return
+    finally:
+        if conn: 
+            conn.close()
+    
+    msg = f"⏳ Pending Deposits - @{username}\n\n"
+    
+    if not deposits:
+        msg += "No pending deposits found."
+    else:
+        for i, deposit in enumerate(deposits, 1):
+            payment_id = deposit['payment_id'][:12] + "..."
+            currency = deposit['currency'].upper()
+            amount = format_currency(deposit['target_eur_amount'])
+            expected_crypto = deposit['expected_crypto_amount']
+            deposit_type = "Purchase" if deposit['is_purchase'] else "Refill"
+            
+            try:
+                created_dt = datetime.fromisoformat(deposit['created_at'].replace('Z', '+00:00'))
+                if created_dt.tzinfo is None: 
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+                date_str = created_dt.strftime('%Y-%m-%d %H:%M')
+            except (ValueError, TypeError): 
+                date_str = "Unknown date"
+            
+            msg += f"{i}. {deposit_type} - {amount}€\n"
+            msg += f"   💰 Expected: {expected_crypto} {currency}\n"
+            msg += f"   📅 Created: {date_str}\n"
+            msg += f"   🆔 Payment: {payment_id}\n\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back to User", callback_data=f"adm_user_overview|{user_id}")],
+        [InlineKeyboardButton("🔍 Search Another", callback_data="adm_search_user_start")]
+    ]
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_user_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows paginated purchase history for a user."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or len(params) < 2 or not params[0].isdigit() or not params[1].isdigit():
+        return await query.answer("Error: Invalid parameters.", show_alert=True)
+    
+    user_id = int(params[0])
+    offset = int(params[1])
+    limit = 10
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Get user info
+        c.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
+        user_result = c.fetchone()
+        if not user_result:
+            return await query.answer("User not found.", show_alert=True)
+        
+        username = user_result['username'] or f"ID_{user_id}"
+        
+        # Get total count
+        c.execute("SELECT COUNT(*) as count FROM purchases WHERE user_id = ?", (user_id,))
+        total_count = c.fetchone()['count']
+        
+        # Get purchases for this page
+        c.execute("""
+            SELECT purchase_date, product_name, product_type, product_size, price_paid, city, district
+            FROM purchases 
+            WHERE user_id = ? 
+            ORDER BY purchase_date DESC 
+            LIMIT ? OFFSET ?
+        """, (user_id, limit, offset))
+        purchases = c.fetchall()
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching purchases for user {user_id}: {e}", exc_info=True)
+        await query.answer("Database error.", show_alert=True)
+        return
+    finally:
+        if conn: 
+            conn.close()
+    
+    current_page = (offset // limit) + 1
+    total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+    
+    msg = f"📜 Purchase History - @{username}\n"
+    msg += f"Page {current_page}/{total_pages} ({total_count} total)\n\n"
+    
+    if not purchases:
+        msg += "No purchases found."
+    else:
+        for i, purchase in enumerate(purchases, offset + 1):
+            try:
+                dt_obj = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
+                if dt_obj.tzinfo is None: 
+                    dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                date_str = dt_obj.strftime('%Y-%m-%d %H:%M')
+            except (ValueError, TypeError): 
+                date_str = "Unknown date"
+            
+            p_type = purchase['product_type']
+            p_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+            p_size = purchase['product_size'] or 'N/A'
+            p_price = format_currency(purchase['price_paid'])
+            p_city = purchase['city'] or 'N/A'
+            p_district = purchase['district'] or 'N/A'
+            
+            msg += f"{i}. {p_emoji} {p_type} {p_size} - {p_price}€\n"
+            msg += f"   📍 {p_city}/{p_district}\n"
+            msg += f"   📅 {date_str}\n\n"
+    
+    # Pagination buttons
+    keyboard = []
+    nav_buttons = []
+    
+    if current_page > 1:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"adm_user_purchases|{user_id}|{max(0, offset - limit)}"))
+    if current_page < total_pages:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_user_purchases|{user_id}|{offset + limit}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Back to User", callback_data=f"adm_user_overview|{user_id}")])
+    keyboard.append([InlineKeyboardButton("🔍 Search Another", callback_data="adm_search_user_start")])
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows paginated admin actions for a user."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or len(params) < 2 or not params[0].isdigit() or not params[1].isdigit():
+        return await query.answer("Error: Invalid parameters.", show_alert=True)
+    
+    user_id = int(params[0])
+    offset = int(params[1])
+    limit = 10
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Get user info
+        c.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
+        user_result = c.fetchone()
+        if not user_result:
+            return await query.answer("User not found.", show_alert=True)
+        
+        username = user_result['username'] or f"ID_{user_id}"
+        
+        # Get total count
+        c.execute("SELECT COUNT(*) as count FROM admin_log WHERE target_user_id = ?", (user_id,))
+        total_count = c.fetchone()['count']
+        
+        # Get actions for this page
+        c.execute("""
+            SELECT timestamp, action, reason, amount_change, old_value, new_value
+            FROM admin_log 
+            WHERE target_user_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ? OFFSET ?
+        """, (user_id, limit, offset))
+        actions = c.fetchall()
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching admin actions for user {user_id}: {e}", exc_info=True)
+        await query.answer("Database error.", show_alert=True)
+        return
+    finally:
+        if conn: 
+            conn.close()
+    
+    current_page = (offset // limit) + 1
+    total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+    
+    msg = f"🔧 Admin Actions - @{username}\n"
+    msg += f"Page {current_page}/{total_pages} ({total_count} total)\n\n"
+    
+    if not actions:
+        msg += "No admin actions found."
+    else:
+        for i, action in enumerate(actions, offset + 1):
+            try:
+                action_dt = datetime.fromisoformat(action['timestamp'].replace('Z', '+00:00'))
+                if action_dt.tzinfo is None: 
+                    action_dt = action_dt.replace(tzinfo=timezone.utc)
+                date_str = action_dt.strftime('%Y-%m-%d %H:%M')
+            except (ValueError, TypeError): 
+                date_str = "Unknown date"
+            
+            action_name = action['action']
+            reason = action['reason'] or 'No reason'
+            amount_change = action['amount_change']
+            
+            msg += f"{i}. {action_name}\n"
+            msg += f"   📅 {date_str}\n"
+            if amount_change:
+                msg += f"   💰 Amount: {format_currency(amount_change)}€\n"
+            msg += f"   📝 Reason: {reason}\n\n"
+    
+    # Pagination buttons
+    keyboard = []
+    nav_buttons = []
+    
+    if current_page > 1:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"adm_user_actions|{user_id}|{max(0, offset - limit)}"))
+    if current_page < total_pages:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_user_actions|{user_id}|{offset + limit}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Back to User", callback_data=f"adm_user_overview|{user_id}")])
+    keyboard.append([InlineKeyboardButton("🔍 Search Another", callback_data="adm_search_user_start")])
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_user_discounts(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows reseller discounts for a user."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or not params[0].isdigit():
+        return await query.answer("Error: Invalid user ID.", show_alert=True)
+    
+    user_id = int(params[0])
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Get user info
+        c.execute("SELECT username, is_reseller FROM users WHERE user_id = ?", (user_id,))
+        user_result = c.fetchone()
+        if not user_result:
+            return await query.answer("User not found.", show_alert=True)
+        
+        username = user_result['username'] or f"ID_{user_id}"
+        is_reseller = user_result['is_reseller'] == 1
+        
+        if not is_reseller:
+            return await query.answer("User is not a reseller.", show_alert=True)
+        
+        # Get reseller discounts
+        c.execute("""
+            SELECT product_type, discount_percentage 
+            FROM reseller_discounts 
+            WHERE reseller_user_id = ? 
+            ORDER BY product_type
+        """, (user_id,))
+        discounts = c.fetchall()
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching discounts for user {user_id}: {e}", exc_info=True)
+        await query.answer("Database error.", show_alert=True)
+        return
+    finally:
+        if conn:
+            conn.close()
+        
+    msg = f"🏷️ Reseller Discounts - @{username}\n\n"
+    
+    if not discounts:
+        msg += "No reseller discounts configured."
+    else:
+        for discount in discounts:
+            product_type = discount['product_type']
+            percentage = discount['discount_percentage']
+            emoji = PRODUCT_TYPES.get(product_type, DEFAULT_PRODUCT_EMOJI)
+            msg += f"{emoji} {product_type}: {percentage}%\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back to User", callback_data=f"adm_user_overview|{user_id}")],
+        [InlineKeyboardButton("🔍 Search Another", callback_data="adm_search_user_start")]
+    ]
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_user_overview(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Returns to user overview from detailed sections."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or not params[0].isdigit():
+        return await query.answer("Error: Invalid user ID.", show_alert=True)
+    
+    user_id = int(params[0])
+    
+    # Get user info and redisplay overview
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT user_id, username, balance, total_purchases, is_banned, is_reseller FROM users WHERE user_id = ?", (user_id,))
+        user_info = c.fetchone()
+        
+        if not user_info:
+            return await query.answer("User not found.", show_alert=True)
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching user info for overview {user_id}: {e}", exc_info=True)
+        await query.answer("Database error.", show_alert=True)
+        return
+    finally:
+        if conn: 
+            conn.close()
+    
+    # Redisplay the overview
+    await display_user_search_results(context.bot, query.message.chat_id, dict(user_info))
