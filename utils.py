@@ -1558,6 +1558,76 @@ def fetch_reviews(offset=0, limit=5):
 
 
 # --- API Helpers ---
+def get_crypto_price_eur(currency_code: str) -> Decimal | None:
+    """
+    Gets the current price of a cryptocurrency in EUR using CoinGecko API.
+    Returns None if the price cannot be fetched.
+    """
+    currency_code_lower = currency_code.lower()
+    now = time.time()
+    
+    # Check cache first
+    if currency_code_lower in currency_price_cache:
+        price, timestamp = currency_price_cache[currency_code_lower]
+        if now - timestamp < CACHE_EXPIRY_SECONDS:
+            logger.debug(f"Cache hit for {currency_code_lower} price: {price} EUR")
+            return price
+    
+    # Map currency codes to CoinGecko IDs
+    currency_mapping = {
+        'btc': 'bitcoin',
+        'eth': 'ethereum',
+        'ltc': 'litecoin',
+        'sol': 'solana',
+        'ton': 'the-open-network',
+        'usdttrc20': 'tether',
+        'usdterc20': 'tether',
+        'usdtbsc': 'tether',
+        'usdtsol': 'tether',
+        'usdctrc20': 'usd-coin',
+        'usdcerc20': 'usd-coin',
+        'usdcsol': 'usd-coin',
+    }
+    
+    coingecko_id = currency_mapping.get(currency_code_lower)
+    if not coingecko_id:
+        logger.warning(f"No CoinGecko mapping found for currency {currency_code_lower}")
+        return None
+    
+    try:
+        url = f"{COINGECKO_API_URL}/simple/price"
+        params = {
+            'ids': coingecko_id,
+            'vs_currencies': 'eur'
+        }
+        
+        logger.debug(f"Fetching price for {currency_code_lower} from CoinGecko: {url}")
+        response = requests.get(url, params=params, timeout=10)
+        logger.debug(f"CoinGecko price response status: {response.status_code}, content: {response.text[:200]}")
+        response.raise_for_status()
+        
+        data = response.json()
+        if coingecko_id in data and 'eur' in data[coingecko_id]:
+            price = Decimal(str(data[coingecko_id]['eur']))
+            currency_price_cache[currency_code_lower] = (price, now)
+            logger.info(f"Fetched price for {currency_code_lower}: {price} EUR from CoinGecko.")
+            return price
+        else:
+            logger.warning(f"Price data not found for {coingecko_id} in CoinGecko response: {data}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout fetching price for {currency_code_lower} from CoinGecko.")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching price for {currency_code_lower} from CoinGecko: {e}")
+        if e.response is not None:
+            logger.error(f"CoinGecko price error response ({e.response.status_code}): {e.response.text}")
+        return None
+    except (KeyError, ValueError, json.JSONDecodeError) as e:
+        logger.error(f"Error parsing CoinGecko price response for {currency_code_lower}: {e}")
+        return None
+
 def get_nowpayments_min_amount(currency_code: str) -> Decimal | None:
     currency_code_lower = currency_code.lower()
     now = time.time()

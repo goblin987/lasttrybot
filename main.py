@@ -9,7 +9,7 @@ from functools import wraps
 from datetime import timedelta
 import threading # Added for Flask thread
 import json # Added for webhook processing
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 import hmac # For webhook signature verification
 import hashlib # For webhook signature verification
 
@@ -40,7 +40,8 @@ from utils import (
     log_admin_action,
     format_currency,
     clean_expired_pending_payments,
-    get_expired_payments_for_notification
+    get_expired_payments_for_notification,
+    get_crypto_price_eur
 )
 import user # Import user module
 from user import (
@@ -599,13 +600,36 @@ def nowpayments_webhook():
                  return Response("Currency mismatch", status=400)
 
             paid_eur_equivalent = Decimal('0.0')
-            if expected_crypto_decimal > Decimal('0.0'):
-                proportion = actually_paid_decimal / expected_crypto_decimal
-                paid_eur_equivalent = (proportion * target_eur_decimal).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
-            else:
-                logger.error(f"{log_prefix} {payment_id}: Cannot calculate EUR equivalent (expected crypto amount is zero).")
-                asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="zero_expected_crypto"), main_loop)
-                return Response("Cannot calculate EUR equivalent", status=400)
+            # Use real-time crypto price conversion instead of proportion-based calculation
+            try:
+                crypto_price_future = asyncio.run_coroutine_threadsafe(
+                    asyncio.to_thread(get_crypto_price_eur, pay_currency), main_loop
+                )
+                crypto_price_eur = crypto_price_future.result(timeout=10)
+                
+                if crypto_price_eur and crypto_price_eur > Decimal('0.0'):
+                    paid_eur_equivalent = (actually_paid_decimal * crypto_price_eur).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    logger.info(f"{log_prefix} {payment_id}: Used real-time price {crypto_price_eur} EUR/{pay_currency.upper()} for conversion.")
+                else:
+                    logger.warning(f"{log_prefix} {payment_id}: Could not get real-time price for {pay_currency}. Falling back to proportion method.")
+                    # Fallback to proportion method if price fetch fails
+                    if expected_crypto_decimal > Decimal('0.0'):
+                        proportion = actually_paid_decimal / expected_crypto_decimal
+                        paid_eur_equivalent = (proportion * target_eur_decimal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    else:
+                        logger.error(f"{log_prefix} {payment_id}: Cannot calculate EUR equivalent (expected crypto amount is zero).")
+                        asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="zero_expected_crypto"), main_loop)
+                        return Response("Cannot calculate EUR equivalent", status=400)
+            except Exception as price_e:
+                logger.error(f"{log_prefix} {payment_id}: Error getting crypto price: {price_e}. Using proportion fallback.")
+                # Fallback to proportion method if price API fails
+                if expected_crypto_decimal > Decimal('0.0'):
+                    proportion = actually_paid_decimal / expected_crypto_decimal
+                    paid_eur_equivalent = (proportion * target_eur_decimal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                else:
+                    logger.error(f"{log_prefix} {payment_id}: Cannot calculate EUR equivalent (expected crypto amount is zero).")
+                    asyncio.run_coroutine_threadsafe(asyncio.to_thread(remove_pending_deposit, payment_id, trigger="zero_expected_crypto"), main_loop)
+                    return Response("Cannot calculate EUR equivalent", status=400)
 
             logger.info(f"{log_prefix} {payment_id}: User {user_id} paid {actually_paid_decimal} {pay_currency}. Approx EUR value: {paid_eur_equivalent:.2f}. Target EUR: {target_eur_decimal:.2f}")
 
