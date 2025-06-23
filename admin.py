@@ -4642,3 +4642,453 @@ async def handle_adm_user_overview(update: Update, context: ContextTypes.DEFAULT
     
     # Redisplay the overview
     await display_user_search_results(context.bot, query.message.chat_id, dict(user_info))
+
+
+# --- Welcome Message Management Handlers ---
+
+async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Displays the paginated menu for managing welcome message templates."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID:
+        return await query.answer("Access Denied.", show_alert=True)
+
+    lang, lang_data = _get_lang_data(context) # Use helper
+    offset = 0
+    if params and len(params) > 0 and params[0].isdigit():
+        offset = int(params[0])
+
+    # Fetch templates and active template name
+    templates = get_welcome_message_templates(limit=TEMPLATES_PER_PAGE, offset=offset)
+    total_templates = get_welcome_message_template_count()
+    conn = None
+    active_template_name = "default" # Default fallback
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        # Use column name
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        setting_row = c.fetchone()
+        if setting_row and setting_row['setting_value']: # Check if value is not None/empty
+            active_template_name = setting_row['setting_value'] # Use column name
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching active welcome template name: {e}")
+    finally:
+        if conn: conn.close()
+
+    # Build message and keyboard
+    title = lang_data.get("manage_welcome_title", "⚙️ Manage Welcome Messages")
+    prompt = lang_data.get("manage_welcome_prompt", "Select a template to manage or activate:")
+    msg_parts = [f"{title}\n\n{prompt}\n"] # Use list to build message
+    keyboard = []
+
+    if not templates and offset == 0:
+        msg_parts.append("\nNo custom templates found. Add one?")
+    else:
+        for template in templates:
+            name = template['name']
+            desc = template.get('description') or "No description"
+
+            is_active = (name == active_template_name)
+            active_indicator = " (Active ✅)" if is_active else ""
+
+            # Display Name, Description, and Active Status
+            msg_parts.append(f"\n📄 {name}{active_indicator}\n{desc}\n")
+
+            # Buttons: Edit | Activate (if not active) | Delete (if not default and not active)
+            row = [InlineKeyboardButton("✏️ Edit", callback_data=f"adm_edit_welcome|{name}|{offset}")]
+            if not is_active:
+                 row.append(InlineKeyboardButton("✅ Activate", callback_data=f"adm_activate_welcome|{name}|{offset}"))
+
+            can_delete = not (name == "default") and not is_active # Cannot delete default or active
+            if can_delete:
+                 row.append(InlineKeyboardButton("🗑️ Delete", callback_data=f"adm_delete_welcome_confirm|{name}|{offset}"))
+            keyboard.append(row)
+
+        # Pagination
+        total_pages = math.ceil(total_templates / TEMPLATES_PER_PAGE)
+        current_page = (offset // TEMPLATES_PER_PAGE) + 1
+        nav_buttons = []
+        if current_page > 1: nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_manage_welcome|{max(0, offset - TEMPLATES_PER_PAGE)}"))
+        if current_page < total_pages: nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"adm_manage_welcome|{offset + TEMPLATES_PER_PAGE}"))
+        if nav_buttons: keyboard.append(nav_buttons)
+        if total_pages > 1:
+            page_indicator = f"Page {current_page}/{total_pages}"
+            msg_parts.append(f"\n{page_indicator}")
+
+    # Add "Add New" and "Reset Default" buttons
+    keyboard.append([InlineKeyboardButton("➕ Add New Template", callback_data="adm_add_welcome_start")])
+    keyboard.append([InlineKeyboardButton("🔄 Reset to Built-in Default", callback_data="adm_reset_default_confirm")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")])
+
+    final_msg = "".join(msg_parts)
+
+    # Send/Edit message
+    try:
+        await query.edit_message_text(final_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error editing welcome management menu: {e}")
+            await query.answer("Error displaying menu.", show_alert=True)
+        else:
+             await query.answer() # Acknowledge if not modified
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_adm_manage_welcome: {e}", exc_info=True)
+        await query.answer("An error occurred displaying the menu.", show_alert=True)
+
+async def handle_adm_activate_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Activates the selected welcome message template."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params or len(params) < 2 or not params[1].isdigit():
+        return await query.answer("Error: Template name or offset missing.", show_alert=True)
+
+    template_name = params[0]
+    offset = int(params[1])
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    success = set_active_welcome_message(template_name) # Use helper from utils
+    if success:
+        msg_template = lang_data.get("welcome_activate_success", "✅ Template '{name}' activated.")
+        await query.answer(msg_template.format(name=template_name))
+        await handle_adm_manage_welcome(update, context, params=[str(offset)]) # Refresh menu at same page
+    else:
+        msg_template = lang_data.get("welcome_activate_fail", "❌ Failed to activate template '{name}'.")
+        await query.answer(msg_template.format(name=template_name), show_alert=True)
+
+async def handle_adm_add_welcome_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Starts the process of adding a new welcome template (gets name)."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    context.user_data['state'] = 'awaiting_welcome_template_name'
+    prompt = lang_data.get("welcome_add_name_prompt", "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):")
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome|0")]] # Go back to first page
+    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter template name in chat.")
+
+async def handle_adm_edit_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows options for editing an existing welcome template (text or description)."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params or len(params) < 2 or not params[1].isdigit():
+        return await query.answer("Error: Template name or offset missing.", show_alert=True)
+
+    template_name = params[0]
+    offset = int(params[1])
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    # Fetch current text and description
+    current_text = ""
+    current_description = ""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT template_text, description FROM welcome_messages WHERE name = ?", (template_name,))
+        row = c.fetchone()
+        if not row:
+             await query.answer("Template not found.", show_alert=True)
+             return await handle_adm_manage_welcome(update, context, params=[str(offset)])
+        current_text = row['template_text']
+        current_description = row['description'] or ""
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching template '{template_name}' for edit options: {e}")
+        await query.answer("Error fetching template details.", show_alert=True)
+        return await handle_adm_manage_welcome(update, context, params=[str(offset)])
+    finally:
+        if conn: conn.close()
+
+    # Store info needed for potential edits
+    context.user_data['editing_welcome_template_name'] = template_name
+    context.user_data['editing_welcome_offset'] = offset
+
+    # Display using plain text
+    safe_name = template_name
+    safe_desc = current_description or 'Not set'
+
+    msg = f"✏️ Editing Template: {safe_name}\n\n"
+    msg += f"📝 Description: {safe_desc}\n\n"
+    msg += "Choose what to edit:"
+
+    keyboard = [
+        [InlineKeyboardButton("Edit Text", callback_data=f"adm_edit_welcome_text|{template_name}")],
+        [InlineKeyboardButton("Edit Description", callback_data=f"adm_edit_welcome_desc|{template_name}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"adm_manage_welcome|{offset}")]
+    ]
+    try:
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit welcome menu: {e}")
+        else: await query.answer() # Acknowledge if not modified
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_adm_edit_welcome: {e}")
+        await query.answer("Error displaying edit menu.", show_alert=True)
+
+async def handle_adm_edit_welcome_text(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Initiates editing the template text."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
+
+    template_name = params[0]
+    offset = context.user_data.get('editing_welcome_offset', 0) # Get offset from context
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    # Fetch current text to show in prompt
+    current_text = ""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (template_name,))
+        row = c.fetchone()
+        if row: current_text = row['template_text']
+    except sqlite3.Error as e: logger.error(f"DB error fetching text for edit: {e}")
+    finally:
+         if conn: conn.close()
+
+    context.user_data['state'] = 'awaiting_welcome_template_edit' # Reusing state, but specifically for text
+    context.user_data['editing_welcome_template_name'] = template_name # Ensure it's set
+    context.user_data['editing_welcome_field'] = 'text' # Indicate we are editing text
+
+    placeholders = "{username}, {status}, {progress_bar}, {balance_str}, {purchases}, {basket_count}" # Plain text placeholders
+    prompt_template = lang_data.get("welcome_edit_text_prompt", "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n{placeholders}")
+    # Display plain text
+    prompt = prompt_template.format(
+        name=template_name,
+        current_text=current_text,
+        placeholders=placeholders
+    )
+    if len(prompt) > 4000: prompt = prompt[:4000] + "\n[... Current text truncated ...]"
+
+    # Go back to the specific template's edit menu
+    keyboard = [[InlineKeyboardButton("❌ Cancel Edit", callback_data=f"adm_edit_welcome|{template_name}|{offset}")]]
+    try:
+        await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower(): logger.error(f"Error editing edit text prompt: {e}")
+        else: await query.answer()
+    await query.answer("Enter new template text.")
+
+async def handle_adm_edit_welcome_desc(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Initiates editing the template description."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params: return await query.answer("Error: Template name missing.", show_alert=True)
+
+    template_name = params[0]
+    offset = context.user_data.get('editing_welcome_offset', 0)
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    # Fetch current description
+    current_desc = ""
+    conn = None
+    try:
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT description FROM welcome_messages WHERE name = ?", (template_name,))
+        row = c.fetchone(); current_desc = row['description'] or ""
+    except sqlite3.Error as e: logger.error(f"DB error fetching desc for edit: {e}")
+    finally:
+        if conn: conn.close()
+
+    context.user_data['state'] = 'awaiting_welcome_description_edit' # New state for description edit
+    context.user_data['editing_welcome_template_name'] = template_name # Ensure it's set
+    context.user_data['editing_welcome_field'] = 'description' # Indicate we are editing description
+
+    prompt_template = lang_data.get("welcome_edit_description_prompt", "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to skip.")
+    prompt = prompt_template.format(name=template_name, current_desc=current_desc or "Not set")
+
+    keyboard = [[InlineKeyboardButton("❌ Cancel Edit", callback_data=f"adm_edit_welcome|{template_name}|{offset}")]]
+    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    await query.answer("Enter new description.")
+
+async def handle_adm_delete_welcome_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Confirms deletion of a welcome message template."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if not params or len(params) < 2 or not params[1].isdigit():
+         return await query.answer("Error: Template name or offset missing.", show_alert=True)
+
+    template_name = params[0]
+    offset = int(params[1])
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    # Fetch current active template
+    conn = None
+    active_template_name = "default"
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", ("active_welcome_message_name",))
+        row = c.fetchone(); active_template_name = row['setting_value'] if row else "default" # Use column name
+    except sqlite3.Error as e: logger.error(f"DB error checking template status for delete: {e}")
+    finally:
+         if conn: conn.close()
+
+    if template_name == "default":
+        await query.answer("Cannot delete the 'default' template.", show_alert=True)
+        return await handle_adm_manage_welcome(update, context, params=[str(offset)])
+
+    # Prevent deleting the active template
+    if template_name == active_template_name:
+        cannot_delete_msg = lang_data.get("welcome_cannot_delete_active", "❌ Cannot delete the active template. Activate another first.")
+        await query.answer(cannot_delete_msg, show_alert=True)
+        return await handle_adm_manage_welcome(update, context, params=[str(offset)]) # Refresh list
+
+    context.user_data["confirm_action"] = f"delete_welcome_template|{template_name}"
+    title = lang_data.get("welcome_delete_confirm_title", "⚠️ Confirm Deletion")
+    text_template = lang_data.get("welcome_delete_confirm_text", "Are you sure you want to delete the welcome message template named '{name}'?")
+    msg = f"{title}\n\n{text_template.format(name=template_name)}"
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Yes, Delete Template", callback_data="confirm_yes")],
+        [InlineKeyboardButton("❌ No, Cancel", callback_data=f"adm_manage_welcome|{offset}")]
+    ]
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_reset_default_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Confirms resetting the 'default' template to the built-in text and activating it."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    lang, lang_data = _get_lang_data(context)
+
+    context.user_data["confirm_action"] = "reset_default_welcome"
+    title = lang_data.get("welcome_reset_confirm_title", "⚠️ Confirm Reset")
+    text = lang_data.get("welcome_reset_confirm_text", "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?")
+    msg = f"{title}\n\n{text}"
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Yes, Reset & Activate", callback_data="confirm_yes")],
+        [InlineKeyboardButton("❌ No, Cancel", callback_data="adm_manage_welcome|0")]
+    ]
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_confirm_save_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Handles the 'Save Template' button after preview."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    if user_id != ADMIN_ID: return await query.answer("Access Denied.", show_alert=True)
+    if context.user_data.get("state") != 'awaiting_welcome_confirmation':
+        logger.warning("handle_confirm_save_welcome called in wrong state.")
+        return await query.answer("Invalid state.", show_alert=True)
+
+    pending_template = context.user_data.get("pending_welcome_template")
+    if not pending_template or not pending_template.get("name") or pending_template.get("text") is None: # Text can be empty, but key must exist
+        logger.error("Attempted to save welcome template, but pending data missing.")
+        await query.edit_message_text("❌ Error: Save data lost. Please start again.", parse_mode=None)
+        context.user_data.pop("state", None)
+        context.user_data.pop("pending_welcome_template", None)
+        return
+
+    template_name = pending_template['name']
+    template_text = pending_template['text']
+    template_description = pending_template.get('description') # Can be None
+    is_editing = pending_template.get('is_editing', False)
+    offset = pending_template.get('offset', 0)
+    lang, lang_data = _get_lang_data(context) # Use helper
+
+    # Perform the actual save operation
+    success = False
+    if is_editing:
+        success = update_welcome_message_template(template_name, template_text, template_description)
+        msg_template = lang_data.get("welcome_edit_success", "✅ Template '{name}' updated.") if success else lang_data.get("welcome_edit_fail", "❌ Failed to update template '{name}'.")
+    else:
+        success = add_welcome_message_template(template_name, template_text, template_description)
+        msg_template = lang_data.get("welcome_add_success", "✅ Welcome message template '{name}' added.") if success else lang_data.get("welcome_add_fail", "❌ Failed to add welcome message template.")
+
+    # Clean up context
+    context.user_data.pop("state", None)
+    context.user_data.pop("pending_welcome_template", None)
+
+    await query.edit_message_text(msg_template.format(name=template_name), parse_mode=None)
+
+    # Go back to the management list
+    await handle_adm_manage_welcome(update, context, params=[str(offset)])
+
+
+# --- Missing helper functions that are referenced ---
+
+def _get_lang_data(context):
+    """Helper function to get language data."""
+    return 'en', LANGUAGES.get('en', {})
+
+def get_welcome_message_templates(limit=10, offset=0):
+    """Helper function to get welcome message templates."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT name, description FROM welcome_messages ORDER BY name LIMIT ? OFFSET ?", (limit, offset))
+        return c.fetchall()
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching welcome templates: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+
+def get_welcome_message_template_count():
+    """Helper function to get total count of welcome message templates."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) as count FROM welcome_messages")
+        result = c.fetchone()
+        return result['count'] if result else 0
+    except sqlite3.Error as e:
+        logger.error(f"DB error counting welcome templates: {e}")
+        return 0
+    finally:
+        if conn: conn.close()
+
+def set_active_welcome_message(template_name):
+    """Helper function to set active welcome message template."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                  ("active_welcome_message_name", template_name))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        logger.error(f"DB error setting active welcome template: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def add_welcome_message_template(name, text, description=None):
+    """Helper function to add welcome message template."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO welcome_messages (name, template_text, description) VALUES (?, ?, ?)",
+                  (name, text, description))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        logger.error(f"DB error adding welcome template: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def update_welcome_message_template(name, text, description=None):
+    """Helper function to update welcome message template."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE welcome_messages SET template_text = ?, description = ? WHERE name = ?",
+                  (text, description, name))
+        conn.commit()
+        return c.rowcount > 0
+    except sqlite3.Error as e:
+        logger.error(f"DB error updating welcome template: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+# Constants for pagination
+TEMPLATES_PER_PAGE = 5
