@@ -916,7 +916,10 @@ def validate_discount_code(code_text: str, base_total_float: float) -> tuple[boo
             return False, limit_reached_msg, None
 
         # Check minimum order amount if specified (add this column to DB if needed)
-        min_order_amount = code_data.get('min_order_amount')
+        try:
+            min_order_amount = code_data['min_order_amount']
+        except (KeyError, IndexError):
+            min_order_amount = None
         if min_order_amount is not None and base_total_float < float(min_order_amount):
             logger.info(f"Discount code '{code_data['code']}' minimum order not met: {base_total_float} < {min_order_amount}")
             return False, lang_data.get("discount_min_order_not_met", "Minimum order amount not met for this discount code."), None
