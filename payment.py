@@ -213,14 +213,6 @@ async def create_nowpayments_payment(
     ipn_callback_url = f"{WEBHOOK_URL}/webhook"
     order_desc = f"Basket purchase for user {user_id}" if is_purchase else f"Balance top-up for user {user_id}"
 
-    # Calculate expiration time (configurable, default 1 hour from now)
-    from datetime import datetime, timezone, timedelta
-    import os
-    
-    invoice_expiry_hours = int(os.environ.get("INVOICE_EXPIRY_HOURS", "1"))
-    expiration_time = datetime.now(timezone.utc) + timedelta(hours=invoice_expiry_hours)
-    expiration_iso = expiration_time.isoformat().replace('+00:00', 'Z')
-    
     payload = {
         "price_amount": float(invoice_crypto_amount), # Use the potentially adjusted amount
         "price_currency": pay_currency_code.lower(),
@@ -229,7 +221,8 @@ async def create_nowpayments_payment(
         "order_id": order_id,
         "order_description": f"{order_desc} (~{target_eur_amount:.2f} EUR)",
         "is_fixed_rate": True, # Use fixed rate for more predictable payments
-        "expiration_estimate_date": expiration_iso, # Set invoice to expire in 1 hour
+        # Note: NOWPayments doesn't support custom expiration times via API
+        # Invoice will use their default expiration (typically 30-60 minutes)
     }
     headers = {'x-api-key': NOWPAYMENTS_API_KEY, 'Content-Type': 'application/json'}
     payment_url = f"{NOWPAYMENTS_API_URL}/v1/payment"
@@ -288,7 +281,7 @@ async def create_nowpayments_payment(
         
         # Log payment creation for debugging
         expiry_str = payment_data.get('expiration_estimate_date', 'Unknown')
-        logger.info(f"Payment invoice created: ID={payment_data['payment_id']}, Currency={pay_currency_code.upper()}, Amount={payment_data['pay_amount']}, EUR_Target={target_eur_amount}, User={user_id}, Type={'Purchase' if is_purchase else 'Refill'}, Expires={expiry_str}, ExpiryHours={invoice_expiry_hours}")
+        logger.info(f"Payment invoice created: ID={payment_data['payment_id']}, Currency={pay_currency_code.upper()}, Amount={payment_data['pay_amount']}, EUR_Target={target_eur_amount}, User={user_id}, Type={'Purchase' if is_purchase else 'Refill'}, Expires={expiry_str}")
 
         # 6. Store Pending Deposit Info
         add_success = await asyncio.to_thread(
