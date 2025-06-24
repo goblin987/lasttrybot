@@ -3986,7 +3986,8 @@ async def display_user_search_results(bot, chat_id: int, user_info: dict):
         keyboard.append([InlineKeyboardButton(f"🔧 Admin Actions ({admin_actions_count})", callback_data=f"adm_user_actions|{user_id}|0")])
     
     if is_reseller:
-        keyboard.append([InlineKeyboardButton("🏷️ Reseller Discounts", callback_data=f"adm_user_discounts|{user_id}")])
+        keyboard.append([InlineKeyboardButton("🏷️ Reseller Discounts", callback_data=f"adm_user_discounts|{user_id}"),
+                        InlineKeyboardButton("🔍 Debug Reseller", callback_data=f"adm_debug_reseller_discount|{user_id}")])
     
     # Navigation buttons
     keyboard.append([
@@ -5336,3 +5337,79 @@ def update_welcome_message_template(name, text, description=None):
 
 # Constants for pagination
 TEMPLATES_PER_PAGE = 5
+
+
+async def handle_adm_debug_reseller_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Debug reseller discount system for a specific user."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or not params[0].isdigit():
+        return await query.answer("Error: Invalid user ID.", show_alert=True)
+    
+    user_id = int(params[0])
+    
+    # Import the reseller discount function
+    try:
+        from reseller_management import get_reseller_discount
+    except ImportError:
+        return await query.answer("Reseller system not available.", show_alert=True)
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Get user info
+        c.execute("SELECT username, is_reseller FROM users WHERE user_id = ?", (user_id,))
+        user_result = c.fetchone()
+        if not user_result:
+            return await query.answer("User not found.", show_alert=True)
+        
+        username = user_result['username'] or f"ID_{user_id}"
+        is_reseller = user_result['is_reseller']
+        
+        # Get all product types for testing
+        from utils import PRODUCT_TYPES
+        
+        msg = f"🔍 Reseller Discount Debug - @{username}\n\n"
+        msg += f"Reseller Status: {'✅ Yes' if is_reseller == 1 else '❌ No'} (DB value: {is_reseller})\n\n"
+        
+        if is_reseller == 1:
+            # Get all discount records
+            c.execute("SELECT product_type, discount_percentage FROM reseller_discounts WHERE reseller_user_id = ? ORDER BY product_type", (user_id,))
+            discount_records = c.fetchall()
+            
+            msg += f"Discount Records ({len(discount_records)}):\n"
+            if discount_records:
+                for record in discount_records:
+                    emoji = PRODUCT_TYPES.get(record['product_type'], '📦')
+                    msg += f"• {emoji} {record['product_type']}: {record['discount_percentage']}%\n"
+            else:
+                msg += "• No discount records found\n"
+            
+            msg += "\nLive Discount Check:\n"
+            # Test discount lookup for each product type
+            for product_type in PRODUCT_TYPES.keys():
+                discount = get_reseller_discount(user_id, product_type)
+                emoji = PRODUCT_TYPES.get(product_type, '📦')
+                msg += f"• {emoji} {product_type}: {discount}%\n"
+        else:
+            msg += "User is not marked as reseller in database.\n"
+            msg += "To enable: Admin Menu → Manage Resellers → Enter User ID → Enable Reseller Status"
+        
+    except Exception as e:
+        logger.error(f"Error in reseller debug for user {user_id}: {e}", exc_info=True)
+        await query.answer("Error occurred during debug.", show_alert=True)
+        return
+    finally:
+        if conn:
+            conn.close()
+    
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back to User", callback_data=f"adm_user_overview|{user_id}")],
+        [InlineKeyboardButton("🔍 Search Another", callback_data="adm_search_user_start")]
+    ]
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)

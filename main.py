@@ -298,6 +298,7 @@ def callback_query_router(func):
                 "adm_user_purchases": admin.handle_adm_user_purchases,
                 "adm_user_actions": admin.handle_adm_user_actions,
                 "adm_user_discounts": admin.handle_adm_user_discounts,
+    "adm_debug_reseller_discount": admin.handle_adm_debug_reseller_discount,
                 "adm_user_overview": admin.handle_adm_user_overview,
             }
 

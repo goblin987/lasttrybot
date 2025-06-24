@@ -37,9 +37,26 @@ def get_reseller_discount(user_id: int, product_type: str) -> Decimal:
     try:
         conn = get_db_connection()
         c = conn.cursor()
+        
+        # Enhanced logging for debugging
+        logger.info(f"Checking reseller discount for user {user_id}, product type '{product_type}'")
+        
         c.execute("SELECT is_reseller FROM users WHERE user_id = ?", (user_id,))
         res = c.fetchone()
+        
+        if not res:
+            logger.warning(f"User {user_id} not found in database for reseller discount check")
+            return discount
+            
+        is_reseller = res['is_reseller']
+        logger.info(f"User {user_id} reseller status: {is_reseller} (1=reseller, 0=not reseller)")
+        
         if res and res['is_reseller'] == 1:
+            # Check what discount records exist for this user
+            c.execute("SELECT product_type, discount_percentage FROM reseller_discounts WHERE reseller_user_id = ?", (user_id,))
+            all_discounts = c.fetchall()
+            logger.info(f"User {user_id} has {len(all_discounts)} discount records: {[(d['product_type'], d['discount_percentage']) for d in all_discounts]}")
+            
             c.execute("""
                 SELECT discount_percentage FROM reseller_discounts
                 WHERE reseller_user_id = ? AND product_type = ?
@@ -47,7 +64,11 @@ def get_reseller_discount(user_id: int, product_type: str) -> Decimal:
             discount_res = c.fetchone()
             if discount_res:
                 discount = Decimal(str(discount_res['discount_percentage']))
-                logger.debug(f"Found reseller discount for user {user_id}, type {product_type}: {discount}%")
+                logger.info(f"✅ Found reseller discount for user {user_id}, type '{product_type}': {discount}%")
+            else:
+                logger.info(f"❌ No reseller discount found for user {user_id}, type '{product_type}' (user is reseller but no specific discount set)")
+        else:
+            logger.info(f"User {user_id} is not a reseller (is_reseller={is_reseller}), returning 0% discount")
     except sqlite3.Error as e:
         logger.error(f"DB error fetching reseller discount for user {user_id}, type {product_type}: {e}")
     except Exception as e:
