@@ -268,6 +268,7 @@ LANGUAGES = {
 
         # --- Refill / NOWPayments ---
         "payment_amount_too_low_api": "❌ Payment Amount Too Low: The equivalent of {target_eur_amount} EUR in {currency} \\({crypto_amount}\\) is below the minimum required by the payment provider \\({min_amount} {currency}\\)\\. Please try a higher EUR amount\\.",
+        "payment_amount_too_low_with_min_eur": "❌ Payment Amount Too Low: {target_eur_amount} EUR is below the minimum for {currency} payments \\(minimum: {min_eur_amount} EUR\\)\\. Please try a higher amount or select a different cryptocurrency\\.",
         "error_min_amount_fetch": "❌ Error: Could not retrieve minimum payment amount for {currency}\\. Please try again later or select a different currency\\.",
         "invoice_title_refill": "*Top\\-Up Invoice Created*",
         "invoice_title_purchase": "*Payment Invoice Created*", # <<< NEW
@@ -608,6 +609,7 @@ LANGUAGES = {
 
         # --- Refill / NOWPayments ---
         "payment_amount_too_low_api": "❌ Mokėjimo Suma Per Maža: {target_eur_amount} EUR atitikmuo {currency} \\({crypto_amount}\\) yra mažesnis už minimalų reikalaujamą mokėjimo teikėjo \\({min_amount} {currency}\\)\\. Bandykite didesnę EUR sumą\\.",
+        "payment_amount_too_low_with_min_eur": "❌ Mokėjimo Suma Per Maža: {target_eur_amount} EUR yra mažesnė už minimalų {currency} mokėjimų sumą \\(minimalus: {min_eur_amount} EUR\\)\\. Bandykite didesnę sumą arba pasirinkite kitą kriptovaliutą\\.",
         "error_min_amount_fetch": "❌ Klaida: Nepavyko gauti minimalios mokėjimo sumos {currency}\\. Bandykite vėliau arba pasirinkite kitą valiutą\\.",
         "invoice_title_refill": "*Sąskaita Papildymui Sukurta*",
         "invoice_title_purchase": "*Sąskaita Pirkimui Sukurta*",
@@ -834,6 +836,7 @@ LANGUAGES = {
 
         # --- Refill / NOWPayments ---
         "payment_amount_too_low_api": "❌ Сумма Платежа Слишком Мала: Эквивалент {target_eur_amount} EUR в {currency} \\({crypto_amount}\\) ниже минимума, требуемого платежной системой \\({min_amount} {currency}\\)\\. Попробуйте большую сумму EUR\\.",
+        "payment_amount_too_low_with_min_eur": "❌ Сумма Платежа Слишком Мала: {target_eur_amount} EUR ниже минимума для {currency} платежей \\(минимум: {min_eur_amount} EUR\\)\\. Попробуйте большую сумму или выберите другую криптовалюту\\.",
         "error_min_amount_fetch": "❌ Ошибка: Не удалось получить минимальную сумму платежа для {currency}\\. Попробуйте позже или выберите другую валюту\\.",
         "invoice_title_refill": "*Счет на Пополнение Создан*",
         "invoice_title_purchase": "*Счет на Оплату Создан*",

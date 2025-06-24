@@ -191,20 +191,32 @@ async def create_nowpayments_payment(
         logger.error(f"Could not fetch minimum payment amount for {pay_currency_code} from NOWPayments API.")
         return {'error': 'min_amount_fetch_error', 'currency': pay_currency_code.upper()}
 
-    # Check if purchase value in crypto is below the minimum required by API
-    if is_purchase and estimated_crypto_amount < min_amount_api:
-         logger.warning(f"Basket purchase for user {user_id} ({target_eur_amount} EUR -> {estimated_crypto_amount} {pay_currency_code}) is below the API minimum {min_amount_api} {pay_currency_code}.")
+    # Check if crypto amount is below the minimum required by API - for BOTH purchases and refills
+    if estimated_crypto_amount < min_amount_api:
+         logger.warning(f"{'Purchase' if is_purchase else 'Refill'} for user {user_id} ({target_eur_amount} EUR -> {estimated_crypto_amount} {pay_currency_code}) is below the API minimum {min_amount_api} {pay_currency_code}.")
+         
+         # Convert minimum crypto amount back to EUR for user-friendly error message
+         try:
+             crypto_price_eur = get_crypto_price_eur(pay_currency_code)
+             if crypto_price_eur:
+                 min_eur_amount = min_amount_api * crypto_price_eur
+                 min_eur_formatted = format_currency(min_eur_amount)
+             else:
+                 min_eur_formatted = "N/A"
+         except Exception:
+             min_eur_formatted = "N/A"
+         
          return {
-             'error': 'basket_pay_too_low',
+             'error': 'amount_too_low_api',
              'currency': pay_currency_code.upper(),
-             'min_amount': f"{min_amount_api:.8f}".rstrip('0').rstrip('.'), # Format min amount nicely
-             'basket_total': format_currency(target_eur_amount)
+             'min_amount': f"{min_amount_api:.8f}".rstrip('0').rstrip('.'),
+             'min_eur_amount': min_eur_formatted,
+             'crypto_amount': f"{estimated_crypto_amount:.8f}".rstrip('0').rstrip('.'),
+             'target_eur_amount': target_eur_amount
          }
 
-    # Determine the amount for the invoice: Use estimate OR minimum, whichever is higher
-    invoice_crypto_amount = max(estimated_crypto_amount, min_amount_api)
-    if invoice_crypto_amount > estimated_crypto_amount:
-        logger.warning(f"Estimated amount {estimated_crypto_amount} was below NOWPayments minimum {min_amount_api}. Using minimum for invoice: {invoice_crypto_amount} {pay_currency_code}")
+    # Use the estimated amount since it meets the minimum
+    invoice_crypto_amount = estimated_crypto_amount
 
 
     # 3. Prepare API Request Data
@@ -368,9 +380,26 @@ async def handle_select_refill_crypto(update: Update, context: ContextTypes.DEFA
         elif error_code == 'invalid_api_response': error_message_to_user = error_invalid_response_msg
         elif error_code == 'pending_db_error': error_message_to_user = error_pending_db_msg
         elif error_code == 'amount_too_low_api': # Handle specific error with details
-             min_amount_val = payment_result.get('min_amount', 'N/A'); crypto_amount_val = payment_result.get('crypto_amount', 'N/A')
+             min_amount_val = payment_result.get('min_amount', 'N/A')
+             crypto_amount_val = payment_result.get('crypto_amount', 'N/A')
+             min_eur_amount = payment_result.get('min_eur_amount', 'N/A')
              target_eur_val = payment_result.get('target_eur_amount', refill_eur_amount_decimal)
-             error_message_to_user = error_amount_too_low_api_msg.format(target_eur_amount=format_currency(target_eur_val), currency=payment_result.get('currency', selected_asset_code.upper()), crypto_amount=crypto_amount_val, min_amount=min_amount_val)
+             
+             # Use better message if we have EUR minimum amount
+             if min_eur_amount != 'N/A':
+                 error_amount_too_low_with_min_eur_msg = lang_data.get("payment_amount_too_low_with_min_eur", "❌ Payment Amount Too Low: {target_eur_amount} EUR is below the minimum for {currency} payments (minimum: {min_eur_amount} EUR). Please try a higher amount or select a different cryptocurrency.")
+                 error_message_to_user = error_amount_too_low_with_min_eur_msg.format(
+                     target_eur_amount=format_currency(target_eur_val),
+                     currency=payment_result.get('currency', selected_asset_code.upper()),
+                     min_eur_amount=min_eur_amount
+                 )
+             else:
+                 error_message_to_user = error_amount_too_low_api_msg.format(
+                     target_eur_amount=format_currency(target_eur_val),
+                     currency=payment_result.get('currency', selected_asset_code.upper()),
+                     crypto_amount=crypto_amount_val,
+                     min_amount=min_amount_val
+                 )
         elif error_code in ['api_timeout', 'api_request_failed', 'api_unexpected_error', 'internal_server_error', 'internal_estimate_error']:
             error_message_to_user = error_nowpayments_api_msg
 
@@ -460,7 +489,7 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
         logger.error(f"Failed to create NOWPayments basket payment invoice for user {user_id}: {error_code} - Details: {payment_result}")
 
         # --- Un-reserve items if invoice creation failed early ---
-        if error_code in ['basket_pay_too_low', 'amount_too_low_api', 'min_amount_fetch_error', 'estimate_failed', 'estimate_currency_not_found', 'payment_api_misconfigured']:
+        if error_code in ['amount_too_low_api', 'min_amount_fetch_error', 'estimate_failed', 'estimate_currency_not_found', 'payment_api_misconfigured']:
             logger.info(f"Invoice creation failed ({error_code}) before pending record. Un-reserving items from snapshot.")
             try:
                 # Use asyncio.to_thread for the synchronous helper
@@ -473,21 +502,33 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
 
         error_message_to_user = failed_invoice_creation_msg # Default error
         # Handle specific errors for user message
-        if error_code == 'basket_pay_too_low':
-            error_message_to_user = error_basket_pay_too_low_msg.format(
-                basket_total=payment_result.get('basket_total', 'N/A'),
-                currency=payment_result.get('currency', selected_asset_code.upper())
-            )
-        elif error_code == 'estimate_failed': error_message_to_user = error_estimate_failed_msg
+        if error_code == 'estimate_failed': error_message_to_user = error_estimate_failed_msg
         elif error_code == 'estimate_currency_not_found': error_message_to_user = error_estimate_currency_not_found_msg.format(currency=payment_result.get('currency', selected_asset_code.upper()))
         elif error_code == 'min_amount_fetch_error': error_message_to_user = error_min_amount_fetch_msg.format(currency=payment_result.get('currency', selected_asset_code.upper()))
         elif error_code == 'api_key_invalid': error_message_to_user = error_api_key_msg
         elif error_code == 'invalid_api_response': error_message_to_user = error_invalid_response_msg
         elif error_code == 'pending_db_error': error_message_to_user = error_pending_db_msg
         elif error_code == 'amount_too_low_api':
-             min_amount_val = payment_result.get('min_amount', 'N/A'); crypto_amount_val = payment_result.get('crypto_amount', 'N/A')
+             min_amount_val = payment_result.get('min_amount', 'N/A')
+             crypto_amount_val = payment_result.get('crypto_amount', 'N/A')
+             min_eur_amount = payment_result.get('min_eur_amount', 'N/A')
              target_eur_val = payment_result.get('target_eur_amount', final_total_eur_decimal)
-             error_message_to_user = error_amount_too_low_api_msg.format(target_eur_amount=format_currency(target_eur_val), currency=payment_result.get('currency', selected_asset_code.upper()), crypto_amount=crypto_amount_val, min_amount=min_amount_val)
+             
+             # Use better message if we have EUR minimum amount
+             if min_eur_amount != 'N/A':
+                 error_amount_too_low_with_min_eur_msg = lang_data.get("payment_amount_too_low_with_min_eur", "❌ Payment Amount Too Low: {target_eur_amount} EUR is below the minimum for {currency} payments (minimum: {min_eur_amount} EUR). Please try a higher amount or select a different cryptocurrency.")
+                 error_message_to_user = error_amount_too_low_with_min_eur_msg.format(
+                     target_eur_amount=format_currency(target_eur_val),
+                     currency=payment_result.get('currency', selected_asset_code.upper()),
+                     min_eur_amount=min_eur_amount
+                 )
+             else:
+                 error_message_to_user = error_amount_too_low_api_msg.format(
+                     target_eur_amount=format_currency(target_eur_val),
+                     currency=payment_result.get('currency', selected_asset_code.upper()),
+                     crypto_amount=crypto_amount_val,
+                     min_amount=min_amount_val
+                 )
         elif error_code in ['api_timeout', 'api_request_failed', 'api_unexpected_error', 'internal_server_error', 'internal_estimate_error']:
             error_message_to_user = error_nowpayments_api_msg
 
