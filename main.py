@@ -41,6 +41,7 @@ from utils import (
     format_currency,
     clean_expired_pending_payments,
     get_expired_payments_for_notification,
+    clean_abandoned_reservations,
     get_crypto_price_eur
 )
 import user # Import user module
@@ -496,6 +497,13 @@ async def clean_expired_payments_job_wrapper(context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error in background job clean_expired_payments_job: {e}", exc_info=True)
 
+async def clean_abandoned_reservations_job_wrapper(context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("Running background job: clean_abandoned_reservations_job")
+    try:
+        await asyncio.to_thread(clean_abandoned_reservations)
+    except Exception as e:
+        logger.error(f"Error in background job clean_abandoned_reservations_job: {e}", exc_info=True)
+
 
 async def send_timeout_notifications(context: ContextTypes.DEFAULT_TYPE, user_notifications: list):
     """Send timeout notifications to users whose payments have expired."""
@@ -796,7 +804,9 @@ def main() -> None:
             job_queue.run_repeating(clear_expired_baskets_job_wrapper, interval=timedelta(seconds=60), first=timedelta(seconds=10), name="clear_baskets")
             # Payment timeout cleanup job (runs every 10 minutes for better stability)
             job_queue.run_repeating(clean_expired_payments_job_wrapper, interval=timedelta(minutes=10), first=timedelta(minutes=1), name="clean_payments")
-            logger.info("Background jobs setup complete (basket cleanup + payment timeout).")
+            # Abandoned reservation cleanup job (runs every 3 minutes for faster response)
+            job_queue.run_repeating(clean_abandoned_reservations_job_wrapper, interval=timedelta(minutes=3), first=timedelta(minutes=2), name="clean_abandoned")
+            logger.info("Background jobs setup complete (basket cleanup + payment timeout + abandoned reservations).")
         else: logger.warning("Job Queue is not available. Background jobs skipped.")
     else: logger.warning("BASKET_TIMEOUT is not positive. Skipping background job setup.")
 

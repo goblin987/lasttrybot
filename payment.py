@@ -495,6 +495,10 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
     # Store snapshot temporarily BEFORE clearing context, in case we need it for un-reserving
     snapshot_before_clear = context.user_data.get('basket_pay_snapshot')
 
+    # Clear reservation tracking since user proceeded to invoice creation
+    from utils import clear_reservation_tracking
+    clear_reservation_tracking(user_id)
+
     # Clear context *after* attempting payment creation
     context.user_data.pop('basket_pay_snapshot', None)
     context.user_data.pop('basket_pay_total_eur', None)

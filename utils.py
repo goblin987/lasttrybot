@@ -660,6 +660,120 @@ LANGUAGES = {
         "credit_underpayment_purchase": "ℹ️ Jūsų pirkimas nepavyko dėl nepakankamo mokėjimo, tačiau gauta suma ({amount} EUR) buvo įskaityta į jūsų balansą. Jūsų naujas balansas: {new_balance} EUR.",
         "crypto_purchase_underpaid_credited": "⚠️ Pirkimas nepavyko: Aptiktas nepakankamas mokėjimas. Reikalinga suma buvo {needed_eur} EUR. Jūsų balansas buvo papildytas gauta verte ({paid_eur} EUR). Jūsų prekės nebuvo pristatytos.",
         "credit_refill": "✅ Jūsų balansas buvo papildytas {amount} EUR. Priežastis: {reason}. Naujas balansas: {new_balance} EUR.",
+
+
+        # --- Admin ---
+        "admin_menu": "🔧 Admin Panel\n\nManage the bot from here:",
+        "admin_select_city": "🏙️ Select City to Edit\n\nChoose a city:",
+        "admin_select_district": "🏘️ Select District in {city}\n\nPick a district:",
+        "admin_select_type": "💎 Select Product Type\n\nChoose or create a type:",
+        "admin_choose_action": "📦 Manage {type} in {city}, {district}\n\nWhat would you like to do?",
+        "set_media_prompt_plain": "📸 Send a photo, video, or GIF to display above all messages:",
+        "state_error": "❌ Error: Invalid State\n\nPlease start the 'Add New Product' process again from the Admin Panel.",
+        "support": "📞 Need Help?\n\nContact {support} for assistance!",
+        "file_download_error": "❌ Error: Failed to Download Media\n\nPlease try again or contact {support}. ",
+        "admin_enter_type_emoji": "✍️ Please reply with a single emoji for the product type:",
+        "admin_type_emoji_set": "Emoji set to {emoji}.",
+        "admin_edit_type_emoji_button": "✏️ Change Emoji",
+        "admin_invalid_emoji": "❌ Invalid input. Please send a single emoji.",
+        "admin_type_emoji_updated": "✅ Emoji updated successfully for {type_name}!",
+        "admin_edit_type_menu": "🧩 Editing Type: {type_name}\n\nCurrent Emoji: {emoji}\nDescription: {description}\n\nWhat would you like to do?", # Added {description}
+        "admin_edit_type_desc_button": "📝 Edit Description", #<<< NEW
+        # --- Broadcast Translations ---
+        "broadcast_select_target": "📢 Broadcast Message\n\nSelect the target audience:",
+        "broadcast_target_all": "👥 All Users",
+        "broadcast_target_city": "🏙️ By Last Purchased City",
+        "broadcast_target_status": "👑 By User Status",
+        "broadcast_target_inactive": "⏳ By Inactivity (Days)",
+        "broadcast_select_city_target": "🏙️ Select City to Target\n\nUsers whose last purchase was in:",
+        "broadcast_select_status_target": "👑 Select Status to Target:",
+        "broadcast_status_vip": "VIP 👑",
+        "broadcast_status_regular": "Regular ⭐",
+        "broadcast_status_new": "New 🌱",
+        "broadcast_enter_inactive_days": "⏳ Enter Inactivity Period\n\nPlease reply with the number of days since the user's last purchase (or since registration if no purchases). Users inactive for this many days or more will receive the message.",
+        "broadcast_invalid_days": "❌ Invalid number of days. Please enter a positive whole number.",
+        "broadcast_days_too_large": "❌ Number of days is too large. Please enter a smaller number.",
+        "broadcast_ask_message": "📝 Now send the message content (text, photo, video, or GIF with caption):",
+        "broadcast_confirm_title": "📢 Confirm Broadcast",
+        "broadcast_confirm_target_all": "Target: All Users",
+        "broadcast_confirm_target_city": "Target: Last Purchase in {city}",
+        "broadcast_confirm_target_status": "Target: Status - {status}",
+        "broadcast_confirm_target_inactive": "Target: Inactive >= {days} days",
+        "broadcast_confirm_preview": "Preview:",
+        "broadcast_confirm_ask": "Send this message?",
+        "broadcast_no_users_found_target": "⚠️ Broadcast Warning: No users found matching the target criteria.",
+        # --- User Management Translations ---
+        "manage_users_title": "👤 Manage Users",
+        "manage_users_prompt": "Select a user to view details or manage:",
+        "manage_users_no_users": "No users found.",
+        "view_user_profile_title": "👤 User Profile: @{username} (ID: {user_id})",
+        "user_profile_status": "Status",
+        "user_profile_balance": "Balance",
+        "user_profile_purchases": "Total Purchases",
+        "user_profile_banned": "Banned Status",
+        "user_profile_is_banned": "Yes 🚫",
+        "user_profile_not_banned": "No ✅",
+        "user_profile_button_adjust_balance": "💰 Adjust Balance",
+        "user_profile_button_ban": "🚫 Ban User",
+        "user_profile_button_unban": "✅ Unban User",
+        "user_profile_button_back_list": "⬅️ Back to User List",
+        "adjust_balance_prompt": "Reply with the amount to adjust balance for @{username} (ID: {user_id}).\nUse a positive number to add (e.g., 10.50) or a negative number to subtract (e.g., -5.00).",
+        "adjust_balance_reason_prompt": "Please reply with a brief reason for this balance adjustment ({amount} EUR):",
+        "adjust_balance_invalid_amount": "❌ Invalid amount. Please enter a non-zero number (e.g., 10.5 or -5).",
+        "adjust_balance_reason_empty": "❌ Reason cannot be empty. Please provide a reason.",
+        "adjust_balance_success": "✅ Balance adjusted successfully for @{username}. New balance: {new_balance} EUR.",
+        "adjust_balance_db_error": "❌ Database error adjusting balance.",
+        "ban_success": "🚫 User @{username} (ID: {user_id}) has been banned.",
+        "unban_success": "✅ User @{username} (ID: {user_id}) has been unbanned.",
+        "ban_db_error": "❌ Database error updating ban status.",
+        "ban_cannot_ban_admin": "❌ Cannot ban the primary admin.",
+        # <<< Welcome Message Management >>>
+        "manage_welcome_title": "⚙️ Manage Welcome Messages",
+        "manage_welcome_prompt": "Select a template to manage or activate:",
+        "welcome_template_active": " (Active ✅)",
+        "welcome_template_inactive": "",
+        "welcome_button_activate": "✅ Activate",
+        "welcome_button_edit": "✏️ Edit",
+        "welcome_button_delete": "🗑️ Delete",
+        "welcome_button_add_new": "➕ Add New Template",
+        "welcome_button_reset_default": "🔄 Reset to Built-in Default", # <<< NEW
+        "welcome_button_edit_text": "Edit Text", # <<< NEW
+        "welcome_button_edit_desc": "Edit Description", # <<< NEW
+        "welcome_button_preview": "👁️ Preview", # <<< NEW
+        "welcome_button_save": "💾 Save Template", # <<< NEW
+        "welcome_activate_success": "✅ Template '{name}' activated.",
+        "welcome_activate_fail": "❌ Failed to activate template '{name}'.",
+        "welcome_add_name_prompt": "Enter a unique short name for the new template (e.g., 'default', 'promo_weekend'):",
+        "welcome_add_name_exists": "❌ Error: A template with the name '{name}' already exists.",
+        "welcome_add_text_prompt": "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n`{placeholders}`", # Escaped placeholders
+        "welcome_add_description_prompt": "Optional: Enter a short description for this template (admin view only). Send '-' to skip.", # <<< NEW
+        "welcome_add_success": "✅ Welcome message template '{name}' added.",
+        "welcome_add_fail": "❌ Failed to add welcome message template.",
+        "welcome_edit_text_prompt": "Editing Text for '{name}'. Current text:\n\n{current_text}\n\nPlease reply with the new text. Available placeholders:\n`{placeholders}`", # Escaped placeholders
+        "welcome_edit_description_prompt": "Editing description for '{name}'. Current: '{current_desc}'.\n\nEnter new description or send '-' to keep current.", # <<< NEW
+        "welcome_edit_success": "✅ Template '{name}' updated.",
+        "welcome_edit_fail": "❌ Failed to update template '{name}'.",
+        "welcome_delete_confirm_title": "⚠️ Confirm Deletion",
+        "welcome_delete_confirm_text": "Are you sure you want to delete the welcome message template named '{name}'?",
+        "welcome_delete_confirm_active": "\n\n🚨 WARNING: This is the currently active template! Deleting it will revert to the default built-in message.",
+        "welcome_delete_confirm_last": "\n\n🚨 WARNING: This is the last template! Deleting it will revert to the default built-in message.",
+        "welcome_delete_button_yes": "✅ Yes, Delete Template",
+        "welcome_delete_success": "✅ Template '{name}' deleted.",
+        "welcome_delete_fail": "❌ Failed to delete template '{name}'.",
+        "welcome_delete_not_found": "❌ Template '{name}' not found for deletion.",
+        "welcome_cannot_delete_active": "❌ Cannot delete the active template. Activate another first.", # <<< NEW
+        "welcome_reset_confirm_title": "⚠️ Confirm Reset", # <<< NEW
+        "welcome_reset_confirm_text": "Are you sure you want to reset the text of the 'default' template to the built-in version and activate it?", # <<< NEW
+        "welcome_reset_button_yes": "✅ Yes, Reset & Activate", # <<< NEW
+        "welcome_reset_success": "✅ 'default' template reset and activated.", # <<< NEW
+        "welcome_reset_fail": "❌ Failed to reset 'default' template.", # <<< NEW
+        "welcome_preview_title": "--- Welcome Message Preview ---", # <<< NEW
+        "welcome_preview_name": "Name", # <<< NEW
+        "welcome_preview_desc": "Desc", # <<< NEW
+        "welcome_preview_confirm": "Save this template?", # <<< NEW
+        "welcome_save_error_context": "❌ Error: Save data lost. Cannot save template.", # <<< NEW
+        "welcome_invalid_placeholder": "⚠️ Formatting Error! Missing placeholder: `{key}`\n\nRaw Text:\n{text}", # <<< NEW
+        "welcome_formatting_error": "⚠️ Unexpected Formatting Error!\n\nRaw Text:\n{text}", # <<< NEW
     },
     # --- Russian ---
     "ru": {
@@ -2022,6 +2136,76 @@ except ValueError:
 
 PAYMENT_TIMEOUT_SECONDS = PAYMENT_TIMEOUT_MINUTES * 60
 logger.info(f"Payment timeout set to {PAYMENT_TIMEOUT_MINUTES} minutes ({PAYMENT_TIMEOUT_SECONDS} seconds).")
+
+# --- ABANDONED RESERVATION TIMEOUT (much shorter - 10 minutes) ---
+ABANDONED_RESERVATION_TIMEOUT_MINUTES = 10  # Short timeout for items reserved but payment not started
+ABANDONED_RESERVATION_TIMEOUT_SECONDS = ABANDONED_RESERVATION_TIMEOUT_MINUTES * 60
+logger.info(f"Abandoned reservation timeout set to {ABANDONED_RESERVATION_TIMEOUT_MINUTES} minutes.")
+
+# Global dictionary to track reservation timestamps
+_reservation_timestamps = {}  # {user_id: {'timestamp': time.time(), 'snapshot': [...], 'type': 'single'/'basket'}}
+
+def track_reservation(user_id: int, snapshot: list, reservation_type: str):
+    """Track when a user reserves items so we can clean up abandoned reservations."""
+    global _reservation_timestamps
+    _reservation_timestamps[user_id] = {
+        'timestamp': time.time(),
+        'snapshot': snapshot,
+        'type': reservation_type
+    }
+    logger.debug(f"Tracking {reservation_type} reservation for user {user_id}: {len(snapshot)} items")
+
+def clear_reservation_tracking(user_id: int):
+    """Clear reservation tracking when user proceeds to payment or cancels."""
+    global _reservation_timestamps
+    if user_id in _reservation_timestamps:
+        logger.debug(f"Cleared reservation tracking for user {user_id}")
+        del _reservation_timestamps[user_id]
+
+def clean_abandoned_reservations():
+    """Clean up items reserved by users who abandoned the payment flow without proceeding to invoice creation."""
+    global _reservation_timestamps
+    
+    current_time = time.time()
+    cutoff_time = current_time - ABANDONED_RESERVATION_TIMEOUT_SECONDS
+    
+    abandoned_users = []
+    
+    # Find users with abandoned reservations
+    for user_id, reservation_data in _reservation_timestamps.items():
+        if reservation_data['timestamp'] < cutoff_time:
+            abandoned_users.append(user_id)
+    
+    if not abandoned_users:
+        logger.debug("No abandoned reservations found.")
+        return
+    
+    logger.info(f"Found {len(abandoned_users)} users with abandoned reservations to clean up.")
+    
+    # Process each abandoned reservation
+    cleaned_count = 0
+    for user_id in abandoned_users:
+        try:
+            reservation_data = _reservation_timestamps.get(user_id)
+            if not reservation_data:
+                continue
+                
+            snapshot = reservation_data['snapshot']
+            reservation_type = reservation_data['type']
+            
+            # Unreserve the items
+            _unreserve_basket_items(snapshot)
+            
+            # Remove from tracking
+            del _reservation_timestamps[user_id]
+            
+            cleaned_count += 1
+            logger.info(f"Cleaned up abandoned {reservation_type} reservation for user {user_id}: {len(snapshot)} items unreserved")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up abandoned reservation for user {user_id}: {e}", exc_info=True)
+    
+    logger.info(f"Cleaned up {cleaned_count}/{len(abandoned_users)} abandoned reservations.")
 
 # --- NEW: Clean up expired pending payments and unreserve items ---
 def get_expired_payments_for_notification():

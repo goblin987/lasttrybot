@@ -1434,6 +1434,10 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
         context.user_data['basket_pay_snapshot'] = valid_basket_items_snapshot
         context.user_data['basket_pay_total_eur'] = float(final_total)
         context.user_data['basket_pay_discount_code'] = discount_code_to_use
+        
+        # Track reservation for abandonment cleanup  
+        from utils import track_reservation
+        track_reservation(user_id, valid_basket_items_snapshot, "basket")
         insufficient_msg_template = lang_data.get("insufficient_balance_pay_option", "⚠️ Insufficient Balance! ({balance} / {required} EUR)")
         insufficient_msg = insufficient_msg_template.format(balance=format_currency(user_balance), required=format_currency(final_total))
         prompt_msg = lang_data.get("prompt_discount_or_pay", "Do you have a discount code to apply before paying with crypto?")
@@ -1682,6 +1686,10 @@ async def handle_pay_single_item(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['single_item_pay_final_eur'] = float(price_after_reseller)
         context.user_data['single_item_pay_discount_code'] = None
         context.user_data['single_item_pay_back_params'] = params
+        
+        # Track reservation for abandonment cleanup
+        from utils import track_reservation
+        track_reservation(user_id, single_item_snapshot, "single")
 
         item_name_display = f"{PRODUCT_TYPES.get(p_type, '')} {product_details_for_snapshot['name']} {product_details_for_snapshot['size']}"
         price_display_str = format_currency(price_after_reseller)
@@ -2230,6 +2238,11 @@ async def handle_single_item_discount_code_message(update: Update, context: Cont
         success = await payment.process_purchase_with_balance(
             user_id, final_total_decimal, snapshot, discount_code_to_use, context
         )
+        
+        # Clear reservation tracking since payment completed
+        from utils import clear_reservation_tracking
+        clear_reservation_tracking(user_id)
+        
         context.user_data.pop('single_item_pay_snapshot', None)
         context.user_data.pop('single_item_pay_final_eur', None)
         context.user_data.pop('single_item_pay_discount_code', None)
