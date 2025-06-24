@@ -5417,4 +5417,135 @@ async def handle_adm_debug_reseller_discount(update: Update, context: ContextTyp
 
 
 
- async def handle_adm_recent_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):     """Shows real-time monitoring of recent purchases with detailed information."""     query = update.callback_query     if query.from_user.id != ADMIN_ID:         return await query.answer("Access denied.", show_alert=True)          # Get pagination offset if provided     offset = 0     if params and len(params) > 0 and params[0].isdigit():         offset = int(params[0])          purchases_per_page = 25     conn = None          try:         conn = get_db_connection()         c = conn.cursor()                  # Get total count of purchases         c.execute("SELECT COUNT(*) as count FROM purchases")         total_purchases = c.fetchone()['count']                  # Get recent purchases with user and product details         c.execute("""             SELECT                  p.id,                 p.user_id,                 p.product_type,                 p.size,                 p.city,                 p.district,                 p.price_paid,                 p.purchase_time,                 u.username             FROM purchases p             LEFT JOIN users u ON p.user_id = u.user_id             ORDER BY p.purchase_time DESC             LIMIT ? OFFSET ?         """, (purchases_per_page, offset))                  recent_purchases = c.fetchall()              except sqlite3.Error as e:         logger.error(f"DB error fetching recent purchases: {e}", exc_info=True)         await query.edit_message_text("❌ Database error fetching purchases.", parse_mode=None)         return     finally:         if conn:             conn.close()          # Build the message     msg = f"📊 Real-Time Purchase Monitor\n\n"     msg += f"📈 Total Purchases: {total_purchases:,}\n"     msg += f"📋 Showing {len(recent_purchases)} recent purchases:\n\n"          if not recent_purchases:         msg += "No purchases found."     else:         from utils import PRODUCT_TYPES                  for purchase in recent_purchases:             # Format purchase time             try:                 # Parse ISO format datetime                 purchase_dt = datetime.fromisoformat(purchase['purchase_time'].replace('Z', '+00:00'))                 # Convert to local time for display                 local_dt = purchase_dt.replace(tzinfo=timezone.utc).astimezone()                 time_str = local_dt.strftime('%m-%d %H:%M')             except:                 time_str = purchase['purchase_time'][:16] if purchase['purchase_time'] else "Unknown"                          # Get product emoji             product_type = purchase['product_type'] or "Unknown"             product_emoji = PRODUCT_TYPES.get(product_type, '📦')                          # Format buyer info             username = purchase['username'] or f"ID_{purchase['user_id']}"                          # Format location             city = purchase['city'] or "Unknown"             district = purchase['district'] or "Unknown"                          # Format price             price = purchase['price_paid'] or 0             price_str = format_currency(price)                          # Format size             size = purchase['size'] or "N/A"                          msg += f"🕐 {time_str} | {product_emoji} {product_type} {size}\n"             msg += f"📍 {city} / {district} | 💰 {price_str}€\n"             msg += f"👤 @{username}\n"             msg += f"────────────────\n"          # Add pagination     keyboard = []          # Pagination controls     total_pages = math.ceil(total_purchases / purchases_per_page) if total_purchases > 0 else 1     current_page = (offset // purchases_per_page) + 1          nav_buttons = []     if current_page > 1:         prev_offset = max(0, offset - purchases_per_page)         nav_buttons.append(InlineKeyboardButton("⬅️ Newer", callback_data=f"adm_recent_purchases|{prev_offset}"))          if current_page < total_pages:         next_offset = offset + purchases_per_page         nav_buttons.append(InlineKeyboardButton("Older ➡️", callback_data=f"adm_recent_purchases|{next_offset}"))          if nav_buttons:         keyboard.append(nav_buttons)          # Add page info and refresh button     if total_pages > 1:         msg += f"\nPage {current_page}/{total_pages}"          keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="adm_recent_purchases|0")])     keyboard.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_menu")])          try:         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)     except BadRequest as e:         if "message is not modified" not in str(e).lower():             logger.error(f"Error editing recent purchases display: {e}")             await query.answer("Error updating display.", show_alert=True)         else:             await query.answer("Refreshed!")     except Exception as e:         logger.error(f"Error in recent purchases display: {e}", exc_info=True)         await query.edit_message_text("❌ Error displaying purchases.", parse_mode=None) 
+
+async def handle_adm_recent_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows real-time monitoring of recent purchases with detailed information."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID:
+        return await query.answer("Access denied.", show_alert=True)
+    
+    # Get pagination offset if provided
+    offset = 0
+    if params and len(params) > 0 and params[0].isdigit():
+        offset = int(params[0])
+    
+    purchases_per_page = 25
+    conn = None
+    
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Get total count of purchases
+        c.execute("SELECT COUNT(*) as count FROM purchases")
+        total_purchases = c.fetchone()['count']
+        
+        # Get recent purchases with user and product details
+        c.execute("""
+            SELECT 
+                p.id,
+                p.user_id,
+                p.product_type,
+                p.size,
+                p.city,
+                p.district,
+                p.price_paid,
+                p.purchase_time,
+                u.username
+            FROM purchases p
+            LEFT JOIN users u ON p.user_id = u.user_id
+            ORDER BY p.purchase_time DESC
+            LIMIT ? OFFSET ?
+        """, (purchases_per_page, offset))
+        
+        recent_purchases = c.fetchall()
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error fetching recent purchases: {e}", exc_info=True)
+        await query.edit_message_text("❌ Database error fetching purchases.", parse_mode=None)
+        return
+    finally:
+        if conn:
+            conn.close()
+    
+    # Build the message
+    msg = f"📊 Real-Time Purchase Monitor\n\n"
+    msg += f"📈 Total Purchases: {total_purchases:,}\n"
+    msg += f"📋 Showing {len(recent_purchases)} recent purchases:\n\n"
+    
+    if not recent_purchases:
+        msg += "No purchases found."
+    else:
+        from utils import PRODUCT_TYPES
+        
+        for purchase in recent_purchases:
+            # Format purchase time
+            try:
+                # Parse ISO format datetime
+                purchase_dt = datetime.fromisoformat(purchase['purchase_time'].replace('Z', '+00:00'))
+                # Convert to local time for display
+                local_dt = purchase_dt.replace(tzinfo=timezone.utc).astimezone()
+                time_str = local_dt.strftime('%m-%d %H:%M')
+            except:
+                time_str = purchase['purchase_time'][:16] if purchase['purchase_time'] else "Unknown"
+            
+            # Get product emoji
+            product_type = purchase['product_type'] or "Unknown"
+            product_emoji = PRODUCT_TYPES.get(product_type, '📦')
+            
+            # Format buyer info
+            username = purchase['username'] or f"ID_{purchase['user_id']}"
+            
+            # Format location
+            city = purchase['city'] or "Unknown"
+            district = purchase['district'] or "Unknown"
+            
+            # Format price
+            price = purchase['price_paid'] or 0
+            price_str = format_currency(price)
+            
+            # Format size
+            size = purchase['size'] or "N/A"
+            
+            msg += f"🕐 {time_str} | {product_emoji} {product_type} {size}\n"
+            msg += f"📍 {city} / {district} | 💰 {price_str}€\n"
+            msg += f"👤 @{username}\n"
+            msg += f"────────────────\n"
+    
+    # Add pagination
+    keyboard = []
+    
+    # Pagination controls
+    total_pages = math.ceil(total_purchases / purchases_per_page) if total_purchases > 0 else 1
+    current_page = (offset // purchases_per_page) + 1
+    
+    nav_buttons = []
+    if current_page > 1:
+        prev_offset = max(0, offset - purchases_per_page)
+        nav_buttons.append(InlineKeyboardButton("⬅️ Newer", callback_data=f"adm_recent_purchases|{prev_offset}"))
+    
+    if current_page < total_pages:
+        next_offset = offset + purchases_per_page
+        nav_buttons.append(InlineKeyboardButton("Older ➡️", callback_data=f"adm_recent_purchases|{next_offset}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # Add page info and refresh button
+    if total_pages > 1:
+        msg += f"\nPage {current_page}/{total_pages}"
+    
+    keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="adm_recent_purchases|0")])
+    keyboard.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_menu")])
+    
+    try:
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error editing recent purchases display: {e}")
+            await query.answer("Error updating display.", show_alert=True)
+        else:
+            await query.answer("Refreshed!")
+    except Exception as e:
+        logger.error(f"Error in recent purchases display: {e}", exc_info=True)
+        await query.edit_message_text("❌ Error displaying purchases.", parse_mode=None)
