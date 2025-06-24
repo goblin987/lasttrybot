@@ -2137,8 +2137,8 @@ except ValueError:
 PAYMENT_TIMEOUT_SECONDS = PAYMENT_TIMEOUT_MINUTES * 60
 logger.info(f"Payment timeout set to {PAYMENT_TIMEOUT_MINUTES} minutes ({PAYMENT_TIMEOUT_SECONDS} seconds).")
 
-# --- ABANDONED RESERVATION TIMEOUT (much shorter - 10 minutes) ---
-ABANDONED_RESERVATION_TIMEOUT_MINUTES = 10  # Short timeout for items reserved but payment not started
+# --- ABANDONED RESERVATION TIMEOUT (30 minutes) ---
+ABANDONED_RESERVATION_TIMEOUT_MINUTES = 30  # Timeout for items reserved but payment not started
 ABANDONED_RESERVATION_TIMEOUT_SECONDS = ABANDONED_RESERVATION_TIMEOUT_MINUTES * 60
 logger.info(f"Abandoned reservation timeout set to {ABANDONED_RESERVATION_TIMEOUT_MINUTES} minutes.")
 
