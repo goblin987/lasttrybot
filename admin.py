@@ -276,6 +276,86 @@ async def _process_collected_media(context: ContextTypes.DEFAULT_TYPE):
 
     await _prepare_and_confirm_drop(context, user_data, chat_id, user_id, caption, collected_media)
 
+# --- Job Function to Process Bulk Collected Media Group ---
+async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
+    """Job callback to process a bulk collected media group."""
+    job_data = context.job.data
+    user_id = job_data.get("user_id")
+    chat_id = job_data.get("chat_id")
+    media_group_id = job_data.get("media_group_id")
+
+    if not user_id or not chat_id or not media_group_id:
+        logger.error(f"Job _process_bulk_collected_media missing user_id, chat_id, or media_group_id in data: {job_data}")
+        return
+
+    logger.info(f"BULK DEBUG: Job executing: Process bulk media group {media_group_id} for user {user_id}")
+    user_data = context.application.user_data.get(user_id, {})
+    if not user_data:
+        logger.error(f"BULK DEBUG: Job {media_group_id}: Could not find user_data for user {user_id}.")
+        return
+
+    collected_info = user_data.get('bulk_collected_media', {}).get(media_group_id)
+    if not collected_info or 'media' not in collected_info:
+        logger.warning(f"BULK DEBUG: Job {media_group_id}: No bulk collected media info found in user_data for user {user_id}. Might be already processed or cancelled.")
+        user_data.pop('bulk_collecting_media_group_id', None)
+        if 'bulk_collected_media' in user_data:
+            user_data['bulk_collected_media'].pop(media_group_id, None)
+            if not user_data['bulk_collected_media']:
+                user_data.pop('bulk_collected_media', None)
+        return
+
+    collected_media = collected_info.get('media', [])
+    caption = collected_info.get('caption', '')
+
+    # Clean up the media group data
+    user_data.pop('bulk_collecting_media_group_id', None)
+    if 'bulk_collected_media' in user_data and media_group_id in user_data['bulk_collected_media']:
+        del user_data['bulk_collected_media'][media_group_id]
+        if not user_data['bulk_collected_media']:
+            user_data.pop('bulk_collected_media', None)
+
+    # Create message data for the bulk collection
+    bulk_messages = user_data.get("bulk_messages", [])
+    message_data = {
+        "text": caption,
+        "media": collected_media,
+        "timestamp": int(time.time())
+    }
+
+    # Add the collected media group as a single message
+    bulk_messages.append(message_data)
+    user_data["bulk_messages"] = bulk_messages
+    
+    logger.info(f"BULK DEBUG: Added media group {media_group_id} to bulk_messages as single message. New count: {len(bulk_messages)}")
+    
+    # Show updated status by creating a fake update object
+    try:
+        from telegram import Message, Chat, User
+        fake_chat = Chat(id=chat_id, type="private")
+        fake_user = User(id=user_id, is_bot=False, first_name="Admin")
+        fake_message = Message(
+            message_id=0,
+            date=datetime.now(timezone.utc),
+            chat=fake_chat,
+            from_user=fake_user
+        )
+        
+        class FakeUpdate:
+            def __init__(self, message, chat, user):
+                self.message = message
+                self.effective_chat = chat
+                self.effective_user = user
+        
+        fake_update = FakeUpdate(fake_message, fake_chat, fake_user)
+        await show_bulk_messages_status(fake_update, context)
+    except Exception as e:
+        logger.error(f"BULK DEBUG: Error showing bulk messages status after media group processing: {e}")
+        # Fallback: just send a simple message
+        from utils import send_message_with_retry
+        await send_message_with_retry(context.bot, chat_id, 
+            f"✅ Media group added to bulk collection! Total messages: {len(bulk_messages)}/10", 
+            parse_mode=None)
+
 
 # --- Modified Handler for Drop Details Message ---
 async def handle_adm_drop_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
