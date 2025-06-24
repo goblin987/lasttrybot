@@ -328,33 +328,15 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"BULK DEBUG: Added media group {media_group_id} to bulk_messages as single message. New count: {len(bulk_messages)}")
     
-    # Show updated status by creating a fake update object
+    # Send a simple status update message instead of trying to recreate the full status
     try:
-        from telegram import Message, Chat, User
-        fake_chat = Chat(id=chat_id, type="private")
-        fake_user = User(id=user_id, is_bot=False, first_name="Admin")
-        fake_message = Message(
-            message_id=0,
-            date=datetime.now(timezone.utc),
-            chat=fake_chat,
-            from_user=fake_user
-        )
-        
-        class FakeUpdate:
-            def __init__(self, message, chat, user):
-                self.message = message
-                self.effective_chat = chat
-                self.effective_user = user
-        
-        fake_update = FakeUpdate(fake_message, fake_chat, fake_user)
-        await show_bulk_messages_status(fake_update, context)
-    except Exception as e:
-        logger.error(f"BULK DEBUG: Error showing bulk messages status after media group processing: {e}")
-        # Fallback: just send a simple message
         from utils import send_message_with_retry
         await send_message_with_retry(context.bot, chat_id, 
             f"✅ Media group added to bulk collection! Total messages: {len(bulk_messages)}/10", 
             parse_mode=None)
+        logger.info(f"BULK DEBUG: Sent status update for media group {media_group_id}")
+    except Exception as e:
+        logger.error(f"BULK DEBUG: Error sending bulk status update: {e}")
 
 
 # --- Modified Handler for Drop Details Message ---
