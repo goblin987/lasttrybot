@@ -191,6 +191,8 @@ async def create_nowpayments_payment(
         logger.error(f"Could not fetch minimum payment amount for {pay_currency_code} from NOWPayments API.")
         return {'error': 'min_amount_fetch_error', 'currency': pay_currency_code.upper()}
 
+    logger.info(f"NOWPayments minimum amount check: {estimated_crypto_amount} {pay_currency_code} vs minimum {min_amount_api} {pay_currency_code} (estimated >= minimum: {estimated_crypto_amount >= min_amount_api})")
+
     # Check if crypto amount is below the minimum required by API - for BOTH purchases and refills
     if estimated_crypto_amount < min_amount_api:
          logger.warning(f"{'Purchase' if is_purchase else 'Refill'} for user {user_id} ({target_eur_amount} EUR -> {estimated_crypto_amount} {pay_currency_code}) is below the API minimum {min_amount_api} {pay_currency_code}.")
@@ -217,6 +219,7 @@ async def create_nowpayments_payment(
 
     # Use the estimated amount since it meets the minimum
     invoice_crypto_amount = estimated_crypto_amount
+    logger.info(f"Payment amount validation passed: Using {invoice_crypto_amount} {pay_currency_code} for invoice (target: {target_eur_amount} EUR)")
 
 
     # 3. Prepare API Request Data
@@ -243,6 +246,7 @@ async def create_nowpayments_payment(
     try:
         def make_payment_request():
             try:
+                logger.info(f"Creating NOWPayments invoice with payload: {payload}")
                 response = requests.post(payment_url, headers=headers, json=payload, timeout=20)
                 logger.debug(f"NOWPayments create payment response status: {response.status_code}, content: {response.text[:200]}")
                 response.raise_for_status()
@@ -255,14 +259,27 @@ async def create_nowpayments_payment(
                  status_code = e.response.status_code if e.response is not None else None
                  error_content = e.response.text if e.response is not None else "No response content"
                  if status_code == 401: return {'error': 'api_key_invalid'}
-                 if status_code == 400 and "AMOUNT_MINIMAL_ERROR" in error_content:
-                     logger.warning(f"NOWPayments rejected payment for {order_id} due to amount minimal error (API check).")
-                     min_amount_fallback = f"{min_amount_api:.8f}".rstrip('0').rstrip('.')
+                 if status_code == 400 and ("AMOUNT_MINIMAL_ERROR" in error_content or "amountFrom is too small" in error_content):
+                     logger.warning(f"NOWPayments rejected payment for {order_id} due to amount minimal error (API check). Invoice amount: {invoice_crypto_amount} {pay_currency_code}, Min amount: {min_amount_api} {pay_currency_code}")
+                     
+                     # Try to get EUR equivalent for error message
+                     try:
+                         crypto_price_eur = get_crypto_price_eur(pay_currency_code)
+                         if crypto_price_eur and min_amount_api:
+                             min_eur_amount = min_amount_api * crypto_price_eur
+                             min_eur_formatted = format_currency(min_eur_amount)
+                         else:
+                             min_eur_formatted = "N/A"
+                     except Exception:
+                         min_eur_formatted = "N/A"
+                     
+                     min_amount_fallback = f"{min_amount_api:.8f}".rstrip('0').rstrip('.') if min_amount_api else "N/A"
                      # Return specific error information
                      return {
                          'error': 'amount_too_low_api',
                          'currency': pay_currency_code.upper(),
                          'min_amount': min_amount_fallback,
+                         'min_eur_amount': min_eur_formatted,
                          'crypto_amount': f"{invoice_crypto_amount:.8f}".rstrip('0').rstrip('.'),
                          'target_eur_amount': target_eur_amount # Pass original EUR target
                      }

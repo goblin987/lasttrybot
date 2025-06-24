@@ -1657,7 +1657,7 @@ def get_nowpayments_min_amount(currency_code: str) -> Decimal | None:
         min_amount_key = 'min_amount'
         if min_amount_key in data and data[min_amount_key] is not None:
             min_amount = Decimal(str(data[min_amount_key])); min_amount_cache[currency_code_lower] = (min_amount, now)
-            logger.info(f"Fetched minimum amount for {currency_code_lower}: {min_amount} from NOWPayments.")
+            logger.info(f"Fetched minimum amount for {currency_code_lower}: {min_amount} from NOWPayments (cached for {CACHE_EXPIRY_SECONDS * 2}s).")
             return min_amount
         else: logger.warning(f"Could not find '{min_amount_key}' key or it was null for {currency_code_lower} in NOWPayments response: {data}"); return None
     except requests.exceptions.Timeout: logger.error(f"Timeout fetching minimum amount for {currency_code_lower} from NOWPayments."); return None
