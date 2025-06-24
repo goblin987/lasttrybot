@@ -207,6 +207,7 @@ def callback_query_router(func):
                 # Payment Handlers (from payment.py)
                 "select_basket_crypto": payment.handle_select_basket_crypto,
                 "cancel_crypto_payment": payment.handle_cancel_crypto_payment,
+                "refresh_invoice": payment.handle_refresh_invoice,
                 "select_refill_crypto": payment.handle_select_refill_crypto,
 
                 # Primary Admin Handlers (from admin.py)

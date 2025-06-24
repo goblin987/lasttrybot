@@ -563,6 +563,7 @@ Please send the following amount:
 `{escaped_address}`
 
 {expires_at_label} {escaped_expiry}
+⏰ _Note: Even if this invoice expires, you have 2 hours total to complete payment\\._
 
 """
         if is_purchase_invoice: msg += f"{send_warning_template.format(asset=escaped_currency)}\n"
@@ -571,9 +572,11 @@ Please send the following amount:
 
         final_msg = msg.strip()
 
-        # --- Change Cancel Button Callback ---
-        keyboard = [[InlineKeyboardButton(f"❌ {cancel_payment_button_text}", callback_data="cancel_crypto_payment")]] # <<< CHANGED callback_data
-        # -------------------------------------
+        # --- Add both Cancel and Refresh buttons ---
+        keyboard = [
+            [InlineKeyboardButton(f"🔄 Refresh Invoice", callback_data="refresh_invoice")],
+            [InlineKeyboardButton(f"❌ {cancel_payment_button_text}", callback_data="cancel_crypto_payment")]
+        ]
 
         await query.edit_message_text(
             final_msg, reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1131,29 +1134,140 @@ async def handle_confirm_pay(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Call the actual handler which is now located in user.py
     await user.handle_confirm_pay(update, context, params)
 
-# --- NEW Handler for Cancelling Crypto Payment ---
+# --- UPDATED: Callback Handler for Crypto Payment Cancellation ---
 async def handle_cancel_crypto_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Handles user explicitly cancelling a pending crypto payment."""
+    """Handles user clicking Cancel Payment button to cancel their crypto payment and unreserve items."""
     query = update.callback_query
     user_id = query.from_user.id
-    lang, lang_data = _get_lang_data(context) # <<< FIXED: Use helper
-
-    payment_id = context.user_data.pop('pending_payment_id', None)
-
-    if payment_id:
-        logger.info(f"User {user_id} cancelled pending crypto payment {payment_id}.")
-        # Call remove_pending_deposit, which will handle un-reserving if needed
-        # Run the synchronous DB operation in a separate thread
-        await asyncio.to_thread(remove_pending_deposit, payment_id, trigger='user_cancel')
-        cancel_confirm_msg = lang_data.get("payment_cancelled_user", "Payment cancelled. Reserved items (if any) have been released.")
-        await query.answer(cancel_confirm_msg)
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    
+    # Retrieve stored payment_id from user_data
+    pending_payment_id = context.user_data.get('pending_payment_id')
+    
+    if not pending_payment_id:
+        logger.warning(f"User {user_id} tried to cancel crypto payment but no pending_payment_id found in user_data.")
+        await query.answer("No pending payment found to cancel.", show_alert=True)
+        return
+    
+    logger.info(f"User {user_id} requested to cancel crypto payment {pending_payment_id}.")
+    
+    # Remove the pending payment (this will also unreserve items if it's a purchase)
+    removal_success = await asyncio.to_thread(remove_pending_deposit, pending_payment_id, trigger="user_cancellation")
+    
+    # Clear the stored payment_id from user_data regardless of success/failure
+    context.user_data.pop('pending_payment_id', None)
+    
+    if removal_success:
+        cancellation_success_msg = lang_data.get("payment_cancelled_success", "✅ Payment cancelled successfully. Reserved items have been released.")
+        logger.info(f"Successfully cancelled payment {pending_payment_id} for user {user_id}")
     else:
-        logger.warning(f"User {user_id} clicked cancel_crypto_payment, but no pending_payment_id found in context.")
-        cancel_error_msg = lang_data.get("payment_cancel_error", "Could not cancel payment (already processed or context lost).")
-        await query.answer(cancel_error_msg, show_alert=True)
+        cancellation_success_msg = lang_data.get("payment_cancel_error", "⚠️ Payment cancellation processed, but there may have been an issue. Please contact support if you experience problems.")
+        logger.warning(f"Issue occurred during payment cancellation {pending_payment_id} for user {user_id}")
+    
+    # Determine appropriate back button
+    back_button_text = lang_data.get("back_basket_button", "Back to Basket")
+    back_callback = "view_basket"
+    
+    keyboard = [[InlineKeyboardButton(f"⬅️ {back_button_text}", callback_data=back_callback)]]
+    
+    try:
+        await query.edit_message_text(
+            cancellation_success_msg, 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=None
+        )
+    except telegram_error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.warning(f"Could not edit message during payment cancellation for user {user_id}: {e}")
+        await query.answer("Payment cancelled!")
+    
+    await query.answer()
 
-    # Always attempt to refresh the basket view
-    logger.debug(f"Redirecting user {user_id} back to basket view after crypto cancel attempt.")
-    await user.handle_view_basket(update, context)
+# --- NEW: Invoice Refresh Handler ---
+async def handle_refresh_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Handles user requesting a new invoice if their current one expired."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang = context.user_data.get("lang", "en")
+    lang_data = LANGUAGES.get(lang, LANGUAGES['en'])
+    
+    # Check if there's still a pending payment
+    pending_payment_id = context.user_data.get('pending_payment_id')
+    
+    if not pending_payment_id:
+        await query.answer("No active payment found to refresh.", show_alert=True)
+        return
+    
+    # Check if the pending payment still exists in our system
+    pending_info = await asyncio.to_thread(get_pending_deposit, pending_payment_id)
+    
+    if not pending_info:
+        # Payment no longer exists, clear from user data
+        context.user_data.pop('pending_payment_id', None)
+        await query.answer("Payment session has expired. Please start a new payment.", show_alert=True)
+        
+        # Redirect based on payment type
+        back_button_text = lang_data.get("back_basket_button", "Back to Basket")
+        back_callback = "view_basket"
+        keyboard = [[InlineKeyboardButton(f"⬅️ {back_button_text}", callback_data=back_callback)]]
+        
+        try:
+            await query.edit_message_text(
+                "⏰ Payment session expired. Please start a new payment.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=None
+            )
+        except:
+            pass
+        return
+    
+    # Payment still exists, create a new invoice
+    logger.info(f"User {user_id} requested invoice refresh for payment {pending_payment_id}")
+    
+    try:
+        await query.edit_message_text("⏳ Creating new invoice...", reply_markup=None, parse_mode=None)
+    except:
+        await query.answer("Creating new invoice...")
+    
+    # Get payment details from pending info
+    currency = pending_info['currency']
+    target_eur_amount = Decimal(str(pending_info['target_eur_amount']))
+    is_purchase = pending_info.get('is_purchase') == 1
+    basket_snapshot = None
+    discount_code_used = None
+    
+    if is_purchase:
+        try:
+            basket_snapshot = json.loads(pending_info.get('basket_snapshot_json', '[]'))
+            discount_code_used = pending_info.get('discount_code_used')
+        except:
+            logger.error(f"Error parsing basket snapshot for payment {pending_payment_id}")
+    
+    # Cancel the old payment first
+    await asyncio.to_thread(remove_pending_deposit, pending_payment_id, trigger="invoice_refresh")
+    context.user_data.pop('pending_payment_id', None)
+    
+    # Create new payment
+    payment_result = await create_nowpayments_payment(
+        user_id, target_eur_amount, currency,
+        is_purchase=is_purchase,
+        basket_snapshot=basket_snapshot,
+        discount_code=discount_code_used
+    )
+    
+    if 'error' in payment_result:
+        error_msg = lang_data.get("failed_invoice_creation", "❌ Failed to create new invoice. Please try again later.")
+        back_button_text = lang_data.get("back_basket_button", "Back to Basket") if is_purchase else lang_data.get("back_profile_button", "Back to Profile")
+        back_callback = "view_basket" if is_purchase else "profile"
+        keyboard = [[InlineKeyboardButton(f"⬅️ {back_button_text}", callback_data=back_callback)]]
+        
+        try:
+            await query.edit_message_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        except:
+            pass
+    else:
+        # Display new invoice
+        await display_nowpayments_invoice(update, context, payment_result)
 
 # --- END OF FILE payment.py ---
