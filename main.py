@@ -502,7 +502,7 @@ async def send_timeout_notifications(context: ContextTypes.DEFAULT_TYPE, user_no
         try:
             lang_data = LANGUAGES.get(user_lang, LANGUAGES['en'])
             notification_msg = lang_data.get("payment_timeout_notification", 
-                "⏰ Payment Timeout: Your payment for basket items has expired after 30 minutes. Reserved items have been released.")
+                "⏰ Payment Timeout: Your payment for basket items has expired after 2 hours. Reserved items have been released.")
             
             await send_message_with_retry(context.bot, user_id, notification_msg, parse_mode=None)
             logger.info(f"Sent payment timeout notification to user {user_id}")
@@ -790,8 +790,8 @@ def main() -> None:
             logger.info(f"Setting up background jobs...")
             # Basket cleanup job
             job_queue.run_repeating(clear_expired_baskets_job_wrapper, interval=timedelta(seconds=60), first=timedelta(seconds=10), name="clear_baskets")
-            # Payment timeout cleanup job (runs every 5 minutes)
-            job_queue.run_repeating(clean_expired_payments_job_wrapper, interval=timedelta(minutes=5), first=timedelta(seconds=30), name="clean_payments")
+            # Payment timeout cleanup job (runs every 10 minutes for better stability)
+            job_queue.run_repeating(clean_expired_payments_job_wrapper, interval=timedelta(minutes=10), first=timedelta(minutes=1), name="clean_payments")
             logger.info("Background jobs setup complete (basket cleanup + payment timeout).")
         else: logger.warning("Job Queue is not available. Background jobs skipped.")
     else: logger.warning("BASKET_TIMEOUT is not positive. Skipping background job setup.")

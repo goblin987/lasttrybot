@@ -174,7 +174,7 @@ LANGUAGES = {
         "choose_crypto_for_purchase": "Choose crypto to pay {amount} EUR for your basket:", # <<< ADDED
         "crypto_purchase_success": "Payment Confirmed! Your purchase details are being sent.", # <<< ADDED
         "crypto_purchase_failed": "Payment Failed/Expired. Your items are no longer reserved.", # <<< ADDED
-        "payment_timeout_notification": "⏰ Payment Timeout: Your payment for basket items has expired after 30 minutes. Reserved items have been released.", # <<< NEW
+        "payment_timeout_notification": "⏰ Payment Timeout: Your payment for basket items has expired after 2 hours. Reserved items have been released.", # <<< NEW
         "basket_pay_too_low": "Basket total {basket_total} EUR is below minimum for {currency}.", # <<< ADDED
         "balance_changed_error": "❌ Transaction failed: Your balance changed. Please check your balance and try again.",
         "order_failed_all_sold_out_balance": "❌ Order Failed: All items in your basket became unavailable during processing. Your balance was not charged.",
@@ -512,7 +512,7 @@ LANGUAGES = {
         "choose_crypto_for_purchase": "Pasirinkite kriptovaliutą mokėti {amount} EUR už jūsų krepšelį:",
         "crypto_purchase_success": "Mokėjimas patvirtintas! Jūsų pirkimo detalės siunčiamos.",
         "crypto_purchase_failed": "Mokėjimas nepavyko/baigėsi. Jūsų prekės nebėra rezervuotos.",
-        "payment_timeout_notification": "⏰ Mokėjimo Laikas Baigėsi: Jūsų mokėjimas už krepšelio prekes pasibaigė po 30 minučių. Rezervuotos prekės buvo atlaisvintos.", # <<< NEW
+        "payment_timeout_notification": "⏰ Mokėjimo Laikas Baigėsi: Jūsų mokėjimas už krepšelio prekes pasibaigė po 2 valandų. Rezervuotos prekės buvo atlaisvintos.", # <<< NEW
         "basket_pay_too_low": "Krepšelio suma {basket_total} EUR yra mažesnė nei minimali {currency}.",
         "balance_changed_error": "❌ Transakcija nepavyko: Jūsų balansas pasikeitė. Patikrinkite balansą ir bandykite dar kartą.",
         "order_failed_all_sold_out_balance": "❌ Užsakymas nepavyko: Visos prekės krepšelyje tapo neprieinamos apdorojimo metu. Jūsų balansas nebuvo apmokestintas.",
@@ -735,7 +735,7 @@ LANGUAGES = {
         "choose_crypto_for_purchase": "Выберите криптовалюту для оплаты {amount} EUR за вашу корзину:",
         "crypto_purchase_success": "Оплата подтверждена! Детали вашей покупки отправляются.",
         "crypto_purchase_failed": "Оплата не удалась/истекла. Ваши товары больше не зарезервированы.",
-        "payment_timeout_notification": "⏰ Время Оплаты Истекло: Ваш платеж за товары в корзине истек через 30 минут. Зарезервированные товары освобождены.", # <<< NEW
+        "payment_timeout_notification": "⏰ Время Оплаты Истекло: Ваш платеж за товары в корзине истек через 2 часа. Зарезервированные товары освобождены.", # <<< NEW
         "basket_pay_too_low": "Сумма корзины {basket_total} EUR ниже минимальной для {currency}.",
         "balance_changed_error": "❌ Транзакция не удалась: Ваш баланс изменился. Пожалуйста, проверьте баланс и попробуйте снова.",
         "order_failed_all_sold_out_balance": "❌ Заказ не удался: Все товары в вашей корзине стали недоступны во время обработки. Средства с вашего баланса не списаны.",
@@ -1997,9 +1997,19 @@ def set_active_welcome_message(name: str) -> bool:
         logger.error(f"DB error setting active welcome message to '{name}': {e}", exc_info=True)
         return False
 
-# --- PAYMENT RESERVATION TIMEOUT (30 minutes) ---
-PAYMENT_TIMEOUT_MINUTES = 30
+# --- PAYMENT RESERVATION TIMEOUT (2 hours for crypto payments) ---
+PAYMENT_TIMEOUT_MINUTES_STR = os.environ.get("PAYMENT_TIMEOUT_MINUTES", "120")  # Increased from 30 to 120 minutes
+try:
+    PAYMENT_TIMEOUT_MINUTES = int(PAYMENT_TIMEOUT_MINUTES_STR)
+    if PAYMENT_TIMEOUT_MINUTES <= 0:
+        logger.warning("PAYMENT_TIMEOUT_MINUTES non-positive, using default 120 min.")
+        PAYMENT_TIMEOUT_MINUTES = 120
+except ValueError:
+    logger.warning("Invalid PAYMENT_TIMEOUT_MINUTES, using default 120 min.")
+    PAYMENT_TIMEOUT_MINUTES = 120
+
 PAYMENT_TIMEOUT_SECONDS = PAYMENT_TIMEOUT_MINUTES * 60
+logger.info(f"Payment timeout set to {PAYMENT_TIMEOUT_MINUTES} minutes ({PAYMENT_TIMEOUT_SECONDS} seconds).")
 
 # --- NEW: Clean up expired pending payments and unreserve items ---
 def get_expired_payments_for_notification():

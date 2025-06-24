@@ -67,6 +67,40 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# --- Helper to check payment status from NOWPayments API ---
+async def check_payment_status(payment_id: str) -> dict:
+    """Checks the current status of a payment from NOWPayments API."""
+    if not NOWPAYMENTS_API_KEY:
+        return {'error': 'payment_api_misconfigured'}
+
+    status_url = f"{NOWPAYMENTS_API_URL}/v1/payment/{payment_id}"
+    headers = {'x-api-key': NOWPAYMENTS_API_KEY}
+
+    try:
+        def make_status_request():
+            try:
+                response = requests.get(status_url, headers=headers, timeout=15)
+                logger.debug(f"NOWPayments status response for {payment_id}: {response.status_code}, content: {response.text[:200]}")
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.Timeout:
+                logger.error(f"NOWPayments status request timed out for {payment_id}.")
+                return {'error': 'status_api_timeout'}
+            except requests.exceptions.RequestException as e:
+                logger.error(f"NOWPayments status request error for {payment_id}: {e}")
+                return {'error': 'status_api_request_failed', 'details': str(e)}
+            except Exception as e:
+                logger.error(f"Unexpected error during NOWPayments status call for {payment_id}: {e}", exc_info=True)
+                return {'error': 'status_api_unexpected_error', 'details': str(e)}
+
+        status_data = await asyncio.to_thread(make_status_request)
+        return status_data
+
+    except Exception as e:
+        logger.error(f"Unexpected error in check_payment_status for {payment_id}: {e}", exc_info=True)
+        return {'error': 'internal_status_error', 'details': str(e)}
+
+
 # --- NEW: Helper to get NOWPayments Estimate ---
 async def _get_nowpayments_estimate(target_eur_amount: Decimal, pay_currency_code: str) -> dict:
     """Gets the estimated crypto amount from NOWPayments API."""
@@ -186,7 +220,7 @@ async def create_nowpayments_payment(
         "ipn_callback_url": ipn_callback_url,
         "order_id": order_id,
         "order_description": f"{order_desc} (~{target_eur_amount:.2f} EUR)",
-        "is_fixed_rate": False, # Use variable rate for less chance of underpayment issues
+        "is_fixed_rate": True, # Use fixed rate for more predictable payments
     }
     headers = {'x-api-key': NOWPAYMENTS_API_KEY, 'Content-Type': 'application/json'}
     payment_url = f"{NOWPAYMENTS_API_URL}/v1/payment"
@@ -242,6 +276,9 @@ async def create_nowpayments_payment(
         payment_data['target_eur_amount_orig'] = float(target_eur_amount) # Store the FINAL EUR amount requested
         payment_data['pay_amount'] = f"{expected_crypto_amount_from_invoice:.8f}".rstrip('0').rstrip('.') # Store formatted crypto amount
         payment_data['is_purchase'] = is_purchase # Pass flag through response for display logic
+        
+        # Log payment creation for debugging
+        logger.info(f"Payment invoice created: ID={payment_data['payment_id']}, Currency={pay_currency_code.upper()}, Amount={payment_data['pay_amount']}, EUR_Target={target_eur_amount}, User={user_id}, Type={'Purchase' if is_purchase else 'Refill'}")
 
         # 6. Store Pending Deposit Info
         add_success = await asyncio.to_thread(
