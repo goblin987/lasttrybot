@@ -5446,15 +5446,15 @@ async def handle_adm_recent_purchases(update: Update, context: ContextTypes.DEFA
                 p.id,
                 p.user_id,
                 p.product_type,
-                p.size,
+                p.product_size,
                 p.city,
                 p.district,
                 p.price_paid,
-                p.purchase_time,
+                p.purchase_date,
                 u.username
             FROM purchases p
             LEFT JOIN users u ON p.user_id = u.user_id
-            ORDER BY p.purchase_time DESC
+            ORDER BY p.purchase_date DESC
             LIMIT ? OFFSET ?
         """, (purchases_per_page, offset))
         
@@ -5482,12 +5482,12 @@ async def handle_adm_recent_purchases(update: Update, context: ContextTypes.DEFA
             # Format purchase time
             try:
                 # Parse ISO format datetime
-                purchase_dt = datetime.fromisoformat(purchase['purchase_time'].replace('Z', '+00:00'))
+                purchase_dt = datetime.fromisoformat(purchase['purchase_date'].replace('Z', '+00:00'))
                 # Convert to local time for display
                 local_dt = purchase_dt.replace(tzinfo=timezone.utc).astimezone()
                 time_str = local_dt.strftime('%m-%d %H:%M')
             except:
-                time_str = purchase['purchase_time'][:16] if purchase['purchase_time'] else "Unknown"
+                time_str = purchase['purchase_date'][:16] if purchase['purchase_date'] else "Unknown"
             
             # Get product emoji
             product_type = purchase['product_type'] or "Unknown"
@@ -5505,7 +5505,7 @@ async def handle_adm_recent_purchases(update: Update, context: ContextTypes.DEFA
             price_str = format_currency(price)
             
             # Format size
-            size = purchase['size'] or "N/A"
+            size = purchase['product_size'] or "N/A"
             
             msg += f"🕐 {time_str} | {product_emoji} {product_type} {size}\n"
             msg += f"📍 {city} / {district} | 💰 {price_str}€\n"
