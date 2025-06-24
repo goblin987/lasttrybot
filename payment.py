@@ -546,6 +546,9 @@ async def display_nowpayments_invoice(update: Update, context: ContextTypes.DEFA
         cancel_payment_button_text = lang_data.get("cancel_payment_button", "Cancel Payment")
         # --------------------------------------------
 
+        invoice_send_following_amount = lang_data.get("invoice_send_following_amount", "Please send the following amount:")
+        invoice_payment_deadline = lang_data.get("invoice_payment_deadline", "Payment must be completed within 20 minutes of invoice creation.")
+        
         escaped_target_eur = helpers.escape_markdown(target_eur_display, version=2)
         escaped_pay_amount = helpers.escape_markdown(pay_amount_display, version=2)
         escaped_currency = helpers.escape_markdown(pay_currency, version=2)
@@ -554,16 +557,16 @@ async def display_nowpayments_invoice(update: Update, context: ContextTypes.DEFA
 
         msg = f"""{invoice_title_template}
 
-_{helpers.escape_markdown(f"(Amount: {target_eur_display} EUR)", version=2)}_
+_{helpers.escape_markdown(f"({lang_data.get('invoice_amount_label_text', 'Amount')}: {target_eur_display} EUR)", version=2)}_
 
-Please send the following amount:
+{invoice_send_following_amount}
 {amount_label} `{escaped_pay_amount}` {escaped_currency}
 
 {payment_address_label}
 `{escaped_address}`
 
 {expires_at_label} {escaped_expiry}
-⚠️ _Payment must be completed within 20 minutes of invoice creation\\._
+⚠️ _{helpers.escape_markdown(invoice_payment_deadline, version=2)}_
 
 """
         if is_purchase_invoice: msg += f"{send_warning_template.format(asset=escaped_currency)}\n"
