@@ -3926,15 +3926,17 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
     await query.edit_message_text("⏳ Creating bulk products...", parse_mode=None)
     
     created_count = 0
-    failed_count = 0
+    failed_messages = []  # Track failed messages with details
+    successful_products = []  # Track successfully created products
     
     # Process each message as a separate product
     for i, message_data in enumerate(bulk_messages):
+        message_number = i + 1
         text_content = message_data.get("text", "")
         media_list = message_data.get("media", [])
         
         # Create unique product name
-        product_name = f"{p_type} {size} {int(time.time())}_{i+1}"
+        product_name = f"{p_type} {size} {int(time.time())}_{message_number}"
         
         conn = None
         product_id = None
@@ -3960,8 +3962,8 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
                         await file_obj.download_to_drive(temp_file_path)
                         media_item["path"] = temp_file_path
                     except Exception as e:
-                        logger.error(f"Error downloading media for bulk message {i+1}: {e}")
-                        failed_count += 1
+                        logger.error(f"Error downloading media for bulk message {message_number}: {e}")
+                        raise Exception(f"Media download failed: {str(e)}")
             
             # Create product in database
             conn = get_db_connection()
@@ -3994,21 +3996,51 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
                                 media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
                             except OSError as move_err:
                                 logger.error(f"Error moving media {temp_file_path}: {move_err}")
+                                raise Exception(f"Media file move failed: {str(move_err)}")
                         else:
                             logger.warning(f"Temp media not found: {temp_file_path}")
+                            raise Exception(f"Media file not found: {temp_file_path}")
                     else:
                         logger.warning(f"Incomplete media item: {media_item}")
+                        raise Exception(f"Incomplete media data")
                 
                 if media_inserts:
                     c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
             
             conn.commit()
             created_count += 1
-            logger.info(f"Bulk created product {product_id} ({product_name}) from message {i+1}")
+            successful_products.append({
+                'message_number': message_number,
+                'product_id': product_id,
+                'product_name': product_name
+            })
+            logger.info(f"Bulk created product {product_id} ({product_name}) from message {message_number}")
             
         except Exception as e:
-            failed_count += 1
-            logger.error(f"Error creating bulk product from message {i+1}: {e}", exc_info=True)
+            # Track detailed failure information
+            text_preview = text_content[:30] + "..." if len(text_content) > 30 else text_content
+            if not text_preview:
+                text_preview = "(media only)"
+            
+            error_reason = str(e)
+            if "Media download failed" in error_reason:
+                error_type = "Media Download Error"
+            elif "Media file" in error_reason:
+                error_type = "Media Processing Error"
+            elif "database" in error_reason.lower():
+                error_type = "Database Error"
+            else:
+                error_type = "Unknown Error"
+            
+            failed_messages.append({
+                'message_number': message_number,
+                'text_preview': text_preview,
+                'error_type': error_type,
+                'error_reason': error_reason,
+                'media_count': len(media_list)
+            })
+            
+            logger.error(f"Error creating bulk product from message {message_number}: {e}", exc_info=True)
             if conn:
                 try:
                     conn.rollback()
@@ -4029,17 +4061,45 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
     for key in keys_to_clear:
         context.user_data.pop(key, None)
     
-    # Show results
+    # Show detailed results
     type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
-    result_msg = f"✅ Bulk Operation Complete!\n\n"
+    total_messages = len(bulk_messages)
+    failed_count = len(failed_messages)
+    
+    # Main result message
+    result_msg = f"📦 Bulk Operation Complete!\n\n"
     result_msg += f"📍 Location: {city} / {district}\n"
     result_msg += f"{type_emoji} Product: {p_type} {size}\n"
     result_msg += f"💰 Price: {format_currency(price)}€\n\n"
-    result_msg += f"📊 Results:\n"
-    result_msg += f"✅ Created: {created_count} products\n"
+    result_msg += f"📊 Summary:\n"
+    result_msg += f"📝 Total Messages: {total_messages}\n"
+    result_msg += f"✅ Successfully Created: {created_count} products\n"
+    
     if failed_count > 0:
-        result_msg += f"❌ Failed: {failed_count}\n"
-    result_msg += f"\nEach message became a separate product drop in the same category!"
+        result_msg += f"❌ Failed: {failed_count}\n\n"
+        result_msg += f"🔍 Failed Messages Details:\n"
+        
+        for failure in failed_messages:
+            result_msg += f"• Message #{failure['message_number']}: {failure['text_preview']}\n"
+            result_msg += f"  Error: {failure['error_type']}\n"
+            if failure['media_count'] > 0:
+                result_msg += f"  Media: {failure['media_count']} files\n"
+            result_msg += f"  Reason: {failure['error_reason'][:50]}...\n\n"
+        
+        result_msg += f"💡 You can retry the failed messages by:\n"
+        result_msg += f"1. Starting a new bulk operation\n"
+        result_msg += f"2. Re-forwarding only the failed messages\n"
+        result_msg += f"3. Using the same settings ({city}/{district}, {p_type}, {size})\n\n"
+    else:
+        result_msg += f"\n🎉 All messages processed successfully!\n\n"
+    
+    if successful_products:
+        result_msg += f"✅ Created Product IDs: "
+        product_ids = [str(p['product_id']) for p in successful_products[:5]]  # Show first 5
+        result_msg += ", ".join(product_ids)
+        if len(successful_products) > 5:
+            result_msg += f" (+{len(successful_products) - 5} more)"
+        result_msg += "\n"
     
     keyboard = [
         [InlineKeyboardButton("📦 Add More Bulk Products", callback_data="adm_bulk_city")],
@@ -4047,7 +4107,26 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
          InlineKeyboardButton("🏠 User Home", callback_data="back_start")]
     ]
     
+    # Send the main result message
     await send_message_with_retry(context.bot, chat_id, result_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+    
+    # If there are failures, send a separate detailed failure message for better readability
+    if failed_count > 0:
+        failure_detail_msg = f"🚨 Detailed Failure Report:\n\n"
+        for failure in failed_messages:
+            failure_detail_msg += f"📝 Message #{failure['message_number']}:\n"
+            failure_detail_msg += f"   Text: {failure['text_preview']}\n"
+            failure_detail_msg += f"   Media Files: {failure['media_count']}\n"
+            failure_detail_msg += f"   Error Type: {failure['error_type']}\n"
+            failure_detail_msg += f"   Full Error: {failure['error_reason']}\n"
+            failure_detail_msg += f"   ─────────────────\n"
+        
+        failure_detail_msg += f"\n📋 To retry failed messages:\n"
+        failure_detail_msg += f"1. Copy the message numbers that failed\n"
+        failure_detail_msg += f"2. Start new bulk operation with same settings\n"
+        failure_detail_msg += f"3. Forward only those specific messages\n"
+        
+        await send_message_with_retry(context.bot, chat_id, failure_detail_msg, parse_mode=None)
 
 # Product type message handlers
 async def handle_adm_new_type_name_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
