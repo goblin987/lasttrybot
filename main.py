@@ -370,6 +370,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # User Search States (from admin.py)
         'awaiting_search_username': admin.handle_adm_search_username_message,
+        
+        # Broadcast States (from admin.py)
+        'awaiting_broadcast_message': admin.handle_adm_broadcast_message,
+        'awaiting_broadcast_inactive_days': admin.handle_adm_broadcast_inactive_days_message,
     }
 
     handler_func = STATE_HANDLERS.get(state)

@@ -2724,6 +2724,109 @@ async def handle_cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_
     keyboard = [[InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")]]
     await send_message_with_retry(context.bot, query.message.chat_id, "Returning to Admin Menu.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
+# --- Handler for Broadcast Message Content ---
+async def handle_adm_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin sending broadcast message content."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Access Denied.", parse_mode=None)
+        return
+
+    lang, lang_data = _get_lang_data(context)
+    target_type = context.user_data.get('broadcast_target_type', 'all')
+    target_value = context.user_data.get('broadcast_target_value')
+    
+    # Extract message content
+    text = update.message.text or update.message.caption or ""
+    media_file_id = None
+    media_type = None
+    
+    # Check for media
+    if update.message.photo:
+        media_file_id = update.message.photo[-1].file_id
+        media_type = "photo"
+    elif update.message.video:
+        media_file_id = update.message.video.file_id
+        media_type = "video"
+    elif update.message.animation:
+        media_file_id = update.message.animation.file_id
+        media_type = "gif"
+    
+    # Store broadcast content
+    context.user_data['broadcast_content'] = {
+        'text': text,
+        'media_file_id': media_file_id,
+        'media_type': media_type,
+        'target_type': target_type,
+        'target_value': target_value
+    }
+    
+    # Clear state
+    context.user_data.pop('state', None)
+    
+    # Show confirmation with preview
+    preview_msg = "📢 Broadcast Preview\n\n"
+    preview_msg += f"🎯 Target: {target_type}"
+    if target_value:
+        preview_msg += f" = {target_value}"
+    preview_msg += "\n\n"
+    
+    if media_type:
+        preview_msg += f"📎 Media: {media_type.upper()}\n"
+    if text:
+        preview_msg += f"📝 Text: {text[:100]}"
+        if len(text) > 100:
+            preview_msg += "..."
+    else:
+        preview_msg += "📝 Text: (media only)"
+    
+    preview_msg += "\n\n⚠️ Are you sure you want to send this broadcast?"
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Yes, Send Broadcast", callback_data="confirm_broadcast")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_broadcast")]
+    ]
+    
+    await update.message.reply_text(
+        preview_msg, 
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=None
+    )
+
+# --- Handler for Inactive Days Input ---
+async def handle_adm_broadcast_inactive_days_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin entering inactive days for broadcast targeting."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Access Denied.", parse_mode=None)
+        return
+    
+    lang, lang_data = _get_lang_data(context)
+    
+    try:
+        days = int(update.message.text.strip())
+        if days <= 0:
+            raise ValueError("Days must be positive")
+        
+        context.user_data['broadcast_target_value'] = days
+        context.user_data['state'] = 'awaiting_broadcast_message'
+        
+        ask_msg_text = lang_data.get("broadcast_ask_message", "📝 Now send the message content (text, photo, video, or GIF with caption):")
+        keyboard = [[InlineKeyboardButton("❌ Cancel Broadcast", callback_data="cancel_broadcast")]]
+        
+        await update.message.reply_text(
+            f"Targeting users inactive for {days}+ days\n\n{ask_msg_text}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=None
+        )
+        
+    except ValueError:
+        error_msg = lang_data.get("broadcast_invalid_days", "❌ Please enter a valid number of days (positive integer).")
+        keyboard = [[InlineKeyboardButton("❌ Cancel Broadcast", callback_data="cancel_broadcast")]]
+        await update.message.reply_text(
+            error_msg,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=None
+        )
+
 async def send_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str, media_file_id: str | None, media_type: str | None, target_type: str, target_value: str | int | None, admin_chat_id: int):
     """Sends the broadcast message to the target audience."""
     bot = context.bot
