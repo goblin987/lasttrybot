@@ -1370,7 +1370,7 @@ def load_product_types():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute(f"SELECT name, COALESCE(emoji, '{DEFAULT_PRODUCT_EMOJI}') as emoji FROM product_types ORDER BY name")
+            c.execute("SELECT name, COALESCE(emoji, ?) as emoji FROM product_types ORDER BY name", (DEFAULT_PRODUCT_EMOJI,))
             product_types_dict = {row['name']: row['emoji'] for row in c.fetchall()}
     except sqlite3.Error as e:
         logger.error(f"Failed to load product types and emojis: {e}")

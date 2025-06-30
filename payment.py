@@ -986,26 +986,45 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
                     if not f.closed: await asyncio.to_thread(f.close)
                 except Exception as close_e: logger.warning(f"Error closing file handle during final cleanup: {close_e}")
 
-            # --- Product Record Deletion ---
+            # --- Final Message to User ---
+            leave_review_button = lang_data.get("leave_review_button", "Leave a Review")
+            keyboard = [[InlineKeyboardButton(f"✍️ {leave_review_button}", callback_data="leave_review_now")]]
+            await send_message_with_retry(context.bot, chat_id, "Thank you for your purchase!", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+        # --- Product Record Deletion (MOVED HERE - AFTER media delivery) ---
+        if processed_product_ids:
             conn_del = None
             try:
                 conn_del = get_db_connection()
                 c_del = conn_del.cursor()
                 ids_tuple_list = [(pid,) for pid in processed_product_ids]
                 logger.info(f"Purchase Finalization: Attempting to delete product records for user {user_id}. IDs: {processed_product_ids}")
+                
+                # Delete product media records first
+                media_delete_placeholders = ','.join('?' * len(processed_product_ids))
+                c_del.execute(f"DELETE FROM product_media WHERE product_id IN ({media_delete_placeholders})", processed_product_ids)
+                
+                # Delete product records  
                 delete_result = c_del.executemany("DELETE FROM products WHERE id = ?", ids_tuple_list)
                 conn_del.commit()
                 deleted_count = delete_result.rowcount
-                logger.info(f"Deleted {deleted_count} purchased product records for user {user_id}. IDs: {processed_product_ids}")
-            except sqlite3.Error as e: logger.error(f"DB error deleting purchased products: {e}", exc_info=True); conn_del.rollback() if conn_del and conn_del.in_transaction else None
-            except Exception as e: logger.error(f"Unexpected error deleting purchased products: {e}", exc_info=True)
+                logger.info(f"Deleted {deleted_count} purchased product records and their media records for user {user_id}. IDs: {processed_product_ids}")
+                
+                # Schedule media directory deletion AFTER successful delivery
+                for prod_id in processed_product_ids:
+                    media_dir_to_delete = os.path.join(MEDIA_DIR, str(prod_id))
+                    if await asyncio.to_thread(os.path.exists, media_dir_to_delete):
+                        asyncio.create_task(asyncio.to_thread(shutil.rmtree, media_dir_to_delete, ignore_errors=True))
+                        logger.info(f"Scheduled deletion of media dir: {media_dir_to_delete}")
+                        
+            except sqlite3.Error as e: 
+                logger.error(f"DB error deleting purchased products: {e}", exc_info=True)
+                if conn_del and conn_del.in_transaction: 
+                    conn_del.rollback()
+            except Exception as e: 
+                logger.error(f"Unexpected error deleting purchased products: {e}", exc_info=True)
             finally:
                 if conn_del: conn_del.close()
-
-            # --- Final Message to User ---
-            leave_review_button = lang_data.get("leave_review_button", "Leave a Review")
-            keyboard = [[InlineKeyboardButton(f"✍️ {leave_review_button}", callback_data="leave_review_now")]]
-            await send_message_with_retry(context.bot, chat_id, "Thank you for your purchase!", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
         return True # Indicate success
     else: # Purchase failed at DB level
