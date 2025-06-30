@@ -867,11 +867,11 @@ async def handle_confirm_add_drop(update: Update, context: ContextTypes.DEFAULT_
                         logger.warning(f"Temp media not found: {temp_file_path}")
                 else:
                     logger.warning(f"Incomplete media item: {media_item}")
-                            if media_inserts:
-                    c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
-                    logger.info(f"Successfully inserted {len(media_inserts)} media records for bulk product {product_id}")
-                else:
-                    logger.warning(f"No media was inserted for bulk product {product_id}. Media list: {media_list}, Temp dir: {temp_dir}")
+            
+            if media_inserts:
+                c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
+                logger.info(f"Successfully inserted {len(media_inserts)} media records for product {product_id}")
+            else:
                 logger.warning(f"No media was inserted for product {product_id}. Media list: {media_list}, Temp dir: {temp_dir}")
 
         conn.commit(); logger.info(f"Added product {product_id} ({product_name}).")

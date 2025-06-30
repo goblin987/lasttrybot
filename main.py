@@ -771,7 +771,13 @@ def nowpayments_webhook():
          logger.info(f"Webhook received for payment {payment_id} with status: {status} (ignored).")
     return Response(status=200)
 
-@flask_app.route(f"/telegram/{TOKEN}", methods=['POST'])
+@flask_app.route("/telegram/<path:token>", methods=['POST'])
+def catch_old_webhooks(token):
+    """Catch and ignore webhooks from old/deleted bots"""
+    logger.info(f"Ignoring webhook request for old token: {token[:10]}...")
+    return Response(status=200)
+
+@flask_app.route(f"/telegram-webhook/{TOKEN}", methods=['POST'])
 async def telegram_webhook():
     global telegram_app, main_loop
     if not telegram_app or not main_loop:
@@ -827,8 +833,8 @@ def main() -> None:
         nonlocal application
         logger.info("Initializing application...")
         await application.initialize()
-        logger.info(f"Setting Telegram webhook to: {WEBHOOK_URL}/telegram/{TOKEN}")
-        if await application.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram/{TOKEN}", allowed_updates=Update.ALL_TYPES):
+        logger.info(f"Setting Telegram webhook to: {WEBHOOK_URL}/telegram-webhook/{TOKEN}")
+        if await application.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram-webhook/{TOKEN}", allowed_updates=Update.ALL_TYPES):
             logger.info("Telegram webhook set successfully.")
         else:
             logger.error("Failed to set Telegram webhook.")
