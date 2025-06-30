@@ -3362,6 +3362,196 @@ async def handle_reset_default_welcome(update: Update, context: ContextTypes.DEF
 # --- Welcome Message Management Handlers --- END
 
 
+# --- Welcome Message Message Handlers ---
+
+async def handle_adm_welcome_template_name_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles text reply when state is 'awaiting_welcome_template_name'."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if user_id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    if context.user_data.get("state") != "awaiting_welcome_template_name": return
+    
+    template_name = update.message.text.strip()
+    if not template_name:
+        return await send_message_with_retry(context.bot, chat_id, "Template name cannot be empty.", parse_mode=None)
+    
+    if len(template_name) > 50:
+        return await send_message_with_retry(context.bot, chat_id, "Template name too long (max 50 characters).", parse_mode=None)
+
+    # Check if template name already exists
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM welcome_messages WHERE name = ?", (template_name,))
+        if c.fetchone():
+            lang, lang_data = _get_lang_data(context)
+            error_msg = lang_data.get("welcome_add_name_exists", "❌ Error: A template with the name '{name}' already exists.")
+            await send_message_with_retry(context.bot, chat_id, error_msg.format(name=template_name), parse_mode=None)
+            return
+    except sqlite3.Error as e:
+        logger.error(f"DB error checking template name '{template_name}': {e}")
+        await send_message_with_retry(context.bot, chat_id, "❌ Database error checking template name.", parse_mode=None)
+        return
+    finally:
+        if conn: conn.close()
+
+    # Set up for text input
+    context.user_data['state'] = 'awaiting_welcome_template_text'
+    context.user_data['pending_welcome_template'] = {
+        'name': template_name,
+        'is_editing': False,
+        'offset': 0
+    }
+
+    lang, lang_data = _get_lang_data(context)
+    placeholders = "{username}, {status}, {progress_bar}, {balance_str}, {purchases}, {basket_count}"
+    prompt_template = lang_data.get("welcome_add_text_prompt", "Template Name: {name}\n\nPlease reply with the full welcome message text. Available placeholders:\n`{placeholders}`")
+    prompt = prompt_template.format(name=template_name, placeholders=placeholders)
+    
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome|0")]]
+    await send_message_with_retry(context.bot, chat_id, prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_welcome_template_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles text reply when state is 'awaiting_welcome_template_text' or 'awaiting_welcome_template_edit'."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if user_id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    state = context.user_data.get("state")
+    if state not in ["awaiting_welcome_template_text", "awaiting_welcome_template_edit"]: 
+        return
+    
+    template_text = update.message.text.strip()
+    if not template_text:
+        return await send_message_with_retry(context.bot, chat_id, "Template text cannot be empty.", parse_mode=None)
+
+    if state == "awaiting_welcome_template_text":
+        # Adding new template - get data from pending template
+        pending_template = context.user_data.get("pending_welcome_template")
+        if not pending_template or not pending_template.get("name"):
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Template data lost. Please start again.", parse_mode=None)
+            context.user_data.pop("state", None)
+            return
+
+        # Update pending template with text and move to description input
+        pending_template['text'] = template_text
+        context.user_data['state'] = 'awaiting_welcome_description'
+        
+        lang, lang_data = _get_lang_data(context)
+        prompt = lang_data.get("welcome_add_description_prompt", "Optional: Enter a short description for this template (admin view only). Send '-' to skip.")
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_welcome|0")]]
+        await send_message_with_retry(context.bot, chat_id, prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        
+    elif state == "awaiting_welcome_template_edit":
+        # Editing existing template text
+        template_name = context.user_data.get('editing_welcome_template_name')
+        offset = context.user_data.get('editing_welcome_offset', 0)
+        
+        if not template_name:
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Template name lost. Please start again.", parse_mode=None)
+            context.user_data.pop("state", None)
+            return
+
+        # Get current description to preserve it
+        current_description = None
+        conn = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT description FROM welcome_messages WHERE name = ?", (template_name,))
+            row = c.fetchone()
+            if row:
+                current_description = row['description']
+        except sqlite3.Error as e:
+            logger.error(f"DB error fetching description for '{template_name}': {e}")
+        finally:
+            if conn: conn.close()
+
+        # Set up for preview
+        context.user_data['pending_welcome_template'] = {
+            'name': template_name,
+            'text': template_text,
+            'description': current_description,
+            'is_editing': True,
+            'offset': offset
+        }
+        
+        # Show preview
+        await _show_welcome_preview(update, context)
+
+async def handle_adm_welcome_description_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles text reply when state is 'awaiting_welcome_description' or 'awaiting_welcome_description_edit'."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if user_id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    state = context.user_data.get("state")
+    if state not in ["awaiting_welcome_description", "awaiting_welcome_description_edit"]: 
+        return
+    
+    description_text = update.message.text.strip()
+    description = None if description_text == "-" else description_text
+    
+    if state == "awaiting_welcome_description":
+        # Adding new template - finalize and show preview
+        pending_template = context.user_data.get("pending_welcome_template")
+        if not pending_template or not pending_template.get("name") or not pending_template.get("text"):
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Template data lost. Please start again.", parse_mode=None)
+            context.user_data.pop("state", None)
+            return
+
+        pending_template['description'] = description
+        await _show_welcome_preview(update, context)
+        
+    elif state == "awaiting_welcome_description_edit":
+        # Editing existing template description
+        template_name = context.user_data.get('editing_welcome_template_name')
+        offset = context.user_data.get('editing_welcome_offset', 0)
+        
+        if not template_name:
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Template name lost. Please start again.", parse_mode=None)
+            context.user_data.pop("state", None)
+            return
+
+        # Get current text to preserve it
+        current_text = None
+        conn = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT template_text FROM welcome_messages WHERE name = ?", (template_name,))
+            row = c.fetchone()
+            if row:
+                current_text = row['template_text']
+        except sqlite3.Error as e:
+            logger.error(f"DB error fetching text for '{template_name}': {e}")
+        finally:
+            if conn: conn.close()
+
+        if not current_text:
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Could not load current template text.", parse_mode=None)
+            context.user_data.pop("state", None)
+            return
+
+        # Set up for preview
+        context.user_data['pending_welcome_template'] = {
+            'name': template_name,
+            'text': current_text,
+            'description': description,
+            'is_editing': True,
+            'offset': offset
+        }
+        
+        # Show preview
+        await _show_welcome_preview(update, context)
+
+# --- Welcome Message Message Handlers --- END
+
+
 # --- Welcome Message Preview & Save Handlers --- START
 
 async def _show_welcome_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):

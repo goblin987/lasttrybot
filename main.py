@@ -377,6 +377,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Broadcast States (from admin.py)
         'awaiting_broadcast_message': admin.handle_adm_broadcast_message,
         'awaiting_broadcast_inactive_days': admin.handle_adm_broadcast_inactive_days_message,
+        
+        # Welcome Message States (from admin.py)
+        'awaiting_welcome_template_name': admin.handle_adm_welcome_template_name_message,
+        'awaiting_welcome_template_text': admin.handle_adm_welcome_template_text_message,
+        'awaiting_welcome_template_edit': admin.handle_adm_welcome_template_text_message,
+        'awaiting_welcome_description': admin.handle_adm_welcome_description_message,
+        'awaiting_welcome_description_edit': admin.handle_adm_welcome_description_message,
     }
 
     handler_func = STATE_HANDLERS.get(state)
