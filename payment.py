@@ -173,6 +173,34 @@ async def create_nowpayments_payment(
     log_type = "direct purchase" if is_purchase else "refill"
     logger.info(f"Attempting to create NOWPayments {log_type} invoice for user {user_id}, {target_eur_amount} EUR via {pay_currency_code}")
 
+    # Re-validate discount code right before payment creation to prevent race conditions
+    if is_purchase and discount_code:
+        from user import validate_discount_code
+        # Re-calculate the total from basket snapshot to validate discount against current total
+        basket_total_before_discount = Decimal('0.0')
+        if basket_snapshot:
+            for item in basket_snapshot:
+                item_price = Decimal(str(item.get('price', 0)))
+                item_type = item.get('product_type', '')
+                # Calculate reseller discount for this item
+                reseller_discount_percent = await asyncio.to_thread(get_reseller_discount, user_id, item_type)
+                reseller_discount = (item_price * reseller_discount_percent / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                basket_total_before_discount += (item_price - reseller_discount)
+        
+        # Validate the discount code against the current basket total
+        code_valid, validation_message, discount_details = validate_discount_code(discount_code, float(basket_total_before_discount))
+        if not code_valid:
+            logger.warning(f"Discount code '{discount_code}' became invalid during payment creation for user {user_id}: {validation_message}")
+            return {'error': 'discount_code_invalid', 'reason': validation_message, 'code': discount_code}
+        
+        # Verify the final total matches what we expect
+        expected_final_total = Decimal(str(discount_details['final_total']))
+        if abs(expected_final_total - target_eur_amount) > Decimal('0.01'):  # Allow 1 cent tolerance for rounding
+            logger.warning(f"Discount code '{discount_code}' total mismatch for user {user_id}. Expected: {expected_final_total}, Got: {target_eur_amount}")
+            return {'error': 'discount_amount_mismatch', 'expected': float(expected_final_total), 'received': float(target_eur_amount)}
+        
+        logger.info(f"Discount code '{discount_code}' re-validated successfully for user {user_id} payment creation")
+
     # 1. Get Estimate from NOWPayments
     estimate_result = await _get_nowpayments_estimate(target_eur_amount, pay_currency_code)
 
@@ -475,6 +503,8 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
     error_estimate_failed_msg = lang_data.get("error_estimate_failed", "❌ Error: Could not estimate crypto amount. Please try again or select a different currency.")
     error_estimate_currency_not_found_msg = lang_data.get("error_estimate_currency_not_found", "❌ Error: Currency {currency} not supported for estimation. Please select a different currency.")
     error_basket_pay_too_low_msg = lang_data.get("basket_pay_too_low", "❌ Basket total {basket_total} EUR is below the minimum required for {currency}.")
+    error_discount_invalid_msg = lang_data.get("error_discount_invalid_payment", "❌ Your discount code is no longer valid: {reason}. Please return to your basket to continue without the discount.")
+    error_discount_mismatch_msg = lang_data.get("error_discount_mismatch_payment", "❌ Payment amount mismatch detected. Please return to your basket and try again.")
     back_to_basket_button = lang_data.get("back_basket_button", "Back to Basket")
     back_button_markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"⬅️ {back_to_basket_button}", callback_data="view_basket")]])
 
@@ -529,6 +559,10 @@ async def handle_select_basket_crypto(update: Update, context: ContextTypes.DEFA
         elif error_code == 'api_key_invalid': error_message_to_user = error_api_key_msg
         elif error_code == 'invalid_api_response': error_message_to_user = error_invalid_response_msg
         elif error_code == 'pending_db_error': error_message_to_user = error_pending_db_msg
+        elif error_code == 'discount_code_invalid': 
+            error_message_to_user = error_discount_invalid_msg.format(reason=payment_result.get('reason', 'Unknown reason'))
+        elif error_code == 'discount_amount_mismatch': 
+            error_message_to_user = error_discount_mismatch_msg
         elif error_code == 'amount_too_low_api':
              min_amount_val = payment_result.get('min_amount', 'N/A')
              crypto_amount_val = payment_result.get('crypto_amount', 'N/A')
@@ -765,7 +799,27 @@ async def _finalize_purchase(user_id: int, basket_snapshot: list, discount_code_
         c.executemany("INSERT INTO purchases (user_id, product_id, product_name, product_type, product_size, price_paid, city, district, purchase_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", purchases_to_insert)
         c.execute("UPDATE users SET total_purchases = total_purchases + ? WHERE user_id = ?", (len(purchases_to_insert), user_id))
         if discount_code_used:
-            c.execute("UPDATE discount_codes SET uses_count = uses_count + 1 WHERE code = ?", (discount_code_used,))
+            # Atomically increment discount code usage only if limit not exceeded
+            # This prevents race conditions where multiple users use the same code simultaneously
+            update_result = c.execute("""
+                UPDATE discount_codes 
+                SET uses_count = uses_count + 1 
+                WHERE code = ? AND (max_uses IS NULL OR uses_count < max_uses)
+            """, (discount_code_used,))
+            
+            if update_result.rowcount == 0:
+                # Check why the update failed
+                c.execute("SELECT uses_count, max_uses FROM discount_codes WHERE code = ?", (discount_code_used,))
+                code_check = c.fetchone()
+                if code_check:
+                    if code_check['max_uses'] is not None and code_check['uses_count'] >= code_check['max_uses']:
+                        logger.warning(f"Discount code '{discount_code_used}' usage limit exceeded during payment finalization for user {user_id}. Current uses: {code_check['uses_count']}, Max: {code_check['max_uses']}. Purchase completed but usage not incremented.")
+                    else:
+                        logger.error(f"Unexpected: Failed to increment discount code '{discount_code_used}' for user {user_id}, but code exists with uses: {code_check['uses_count']}, max: {code_check['max_uses']}")
+                else:
+                    logger.warning(f"Discount code '{discount_code_used}' not found in database during payment finalization for user {user_id}")
+            else:
+                logger.info(f"Successfully incremented usage count for discount code '{discount_code_used}' for user {user_id}")
         c.execute("UPDATE users SET basket = '' WHERE user_id = ?", (user_id,))
         conn.commit()
         db_update_successful = True
