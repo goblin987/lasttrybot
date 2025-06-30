@@ -1104,11 +1104,10 @@ def init_db():
                 available INTEGER DEFAULT 1, reserved INTEGER DEFAULT 0, original_text TEXT,
                 added_by INTEGER, added_date TEXT
             )''')
-            # product_media table
+            # product_media table (Fixed: No CASCADE deletion, manual cleanup only)
             c.execute('''CREATE TABLE IF NOT EXISTS product_media (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL,
-                media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT,
-                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+                media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT
             )''')
             # purchases table
             c.execute('''CREATE TABLE IF NOT EXISTS purchases (
@@ -1203,6 +1202,29 @@ def init_db():
             c.execute("INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
                       ("active_welcome_message_name", "default"))
             logger.info("Ensured 'default' is set as active welcome message in settings if not already set.")
+
+            # MIGRATION: Remove CASCADE constraint from product_media table if it exists
+            try:
+                # Check if the foreign key constraint exists
+                c.execute("PRAGMA foreign_key_list(product_media)")
+                fk_constraints = c.fetchall()
+                has_cascade_fk = any('CASCADE' in str(fk) for fk in fk_constraints)
+                
+                if has_cascade_fk:
+                    logger.info("Migrating product_media table to remove CASCADE constraint...")
+                    # Create new table without foreign key
+                    c.execute('''CREATE TABLE IF NOT EXISTS product_media_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL,
+                        media_type TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, telegram_file_id TEXT
+                    )''')
+                    # Copy data
+                    c.execute("INSERT INTO product_media_new SELECT * FROM product_media")
+                    # Drop old table and rename new one
+                    c.execute("DROP TABLE product_media")
+                    c.execute("ALTER TABLE product_media_new RENAME TO product_media")
+                    logger.info("Successfully migrated product_media table to remove CASCADE constraint")
+            except Exception as migration_e:
+                logger.warning(f"Migration attempt failed, continuing with existing table: {migration_e}")
 
             # Create Indices
             c.execute("CREATE INDEX IF NOT EXISTS idx_product_media_product_id ON product_media(product_id)")
