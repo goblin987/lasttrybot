@@ -5138,7 +5138,7 @@ async def handle_adm_manage_welcome(update: Update, context: ContextTypes.DEFAUL
     else:
         for template in templates:
             name = template['name']
-            desc = template.get('description') or "No description"
+            desc = template['description'] or "No description"
 
             is_active = (name == active_template_name)
             active_indicator = " (Active ✅)" if is_active else ""
