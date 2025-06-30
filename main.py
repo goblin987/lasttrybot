@@ -78,6 +78,7 @@ from admin import (
     handle_adm_manage_products_dist, handle_adm_manage_products_type, handle_adm_delete_prod,
     handle_adm_manage_types, handle_adm_add_type, handle_adm_delete_type,
     handle_adm_edit_type_menu, handle_adm_change_type_emoji,
+    handle_adm_reassign_type_start, handle_adm_reassign_select_old, handle_adm_reassign_confirm,
     handle_adm_manage_discounts, handle_adm_toggle_discount, handle_adm_delete_discount,
     handle_adm_add_discount_start, handle_adm_use_generated_code, handle_adm_set_discount_type,
     handle_adm_discount_code_message, handle_adm_discount_value_message,
@@ -230,6 +231,9 @@ def callback_query_router(func):
                 "adm_change_type_emoji": admin.handle_adm_change_type_emoji,
                 "adm_add_type": admin.handle_adm_add_type,
                 "adm_delete_type": admin.handle_adm_delete_type,
+                "adm_reassign_type_start": admin.handle_adm_reassign_type_start,
+                "adm_reassign_select_old": admin.handle_adm_reassign_select_old,
+                "adm_reassign_confirm": admin.handle_adm_reassign_confirm,
                 "confirm_force_delete_prompt": admin.handle_confirm_force_delete_prompt, # Changed from confirm_force_delete_type
                 "adm_manage_discounts": admin.handle_adm_manage_discounts, "adm_toggle_discount": admin.handle_adm_toggle_discount,
                 "adm_delete_discount": admin.handle_adm_delete_discount, "adm_add_discount_start": admin.handle_adm_add_discount_start,

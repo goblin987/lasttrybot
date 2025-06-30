@@ -1893,6 +1893,164 @@ async def handle_adm_delete_prod(update: Update, context: ContextTypes.DEFAULT_T
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 
+# --- Product Type Reassignment Handler ---
+async def handle_adm_reassign_type_start(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows interface for reassigning products from one type to another."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    load_all_data()
+    if len(PRODUCT_TYPES) < 2:
+        return await query.edit_message_text(
+            "🔄 Reassign Product Type\n\n❌ You need at least 2 product types to perform reassignment.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]),
+            parse_mode=None
+        )
+    
+    msg = "🔄 Reassign Product Type\n\n"
+    msg += "Select the OLD product type (the one you want to change FROM):\n\n"
+    msg += "⚠️ This will:\n"
+    msg += "• Move all products from OLD type to NEW type\n"
+    msg += "• Update all reseller discounts to use NEW type\n"
+    msg += "• Delete the OLD product type\n"
+    
+    keyboard = []
+    for type_name, emoji in sorted(PRODUCT_TYPES.items()):
+        # Get product count for this type
+        conn = None
+        product_count = 0
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) as count FROM products WHERE product_type = ?", (type_name,))
+            result = c.fetchone()
+            product_count = result['count'] if result else 0
+        except sqlite3.Error as e:
+            logger.error(f"Error counting products for type {type_name}: {e}")
+        finally:
+            if conn: conn.close()
+        
+        button_text = f"{emoji} {type_name}"
+        if product_count > 0:
+            button_text += f" ({product_count} products)"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"adm_reassign_select_old|{type_name}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")])
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_reassign_select_old(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Handles selection of the old product type to reassign from."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params:
+        return await query.answer("Error: Type name missing.", show_alert=True)
+    
+    old_type_name = params[0]
+    load_all_data()
+    
+    if old_type_name not in PRODUCT_TYPES:
+        return await query.edit_message_text(
+            f"❌ Error: Product type '{old_type_name}' not found.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="adm_reassign_type_start")]]),
+            parse_mode=None
+        )
+    
+    # Store the old type selection
+    context.user_data['reassign_old_type_name'] = old_type_name
+    
+    msg = f"🔄 Reassign Product Type\n\n"
+    msg += f"OLD Type: {PRODUCT_TYPES[old_type_name]} {old_type_name}\n\n"
+    msg += "Select the NEW product type (where products will be moved TO):\n"
+    
+    keyboard = []
+    for type_name, emoji in sorted(PRODUCT_TYPES.items()):
+        if type_name == old_type_name:
+            continue  # Don't show the same type as an option
+        
+        keyboard.append([InlineKeyboardButton(f"{emoji} {type_name}", callback_data=f"adm_reassign_confirm|{old_type_name}|{type_name}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Select Old Type", callback_data="adm_reassign_type_start")])
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_reassign_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Shows confirmation for the product type reassignment."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: 
+        return await query.answer("Access denied.", show_alert=True)
+    
+    if not params or len(params) < 2:
+        return await query.answer("Error: Type names missing.", show_alert=True)
+    
+    old_type_name = params[0]
+    new_type_name = params[1]
+    
+    load_all_data()
+    
+    if old_type_name not in PRODUCT_TYPES or new_type_name not in PRODUCT_TYPES:
+        return await query.edit_message_text(
+            "❌ Error: One or both product types not found.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="adm_reassign_type_start")]]),
+            parse_mode=None
+        )
+    
+    # Count affected items
+    conn = None
+    product_count = 0
+    reseller_discount_count = 0
+    
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Count products that will be reassigned
+        c.execute("SELECT COUNT(*) as count FROM products WHERE product_type = ?", (old_type_name,))
+        result = c.fetchone()
+        product_count = result['count'] if result else 0
+        
+        # Count reseller discounts that will be affected
+        c.execute("SELECT COUNT(*) as count FROM reseller_discounts WHERE product_type = ?", (old_type_name,))
+        result = c.fetchone()
+        reseller_discount_count = result['count'] if result else 0
+        
+    except sqlite3.Error as e:
+        logger.error(f"Error counting items for reassignment: {e}")
+        return await query.edit_message_text(
+            "❌ Database error checking reassignment impact.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="adm_reassign_type_start")]]),
+            parse_mode=None
+        )
+    finally:
+        if conn: conn.close()
+    
+    old_emoji = PRODUCT_TYPES.get(old_type_name, '📦')
+    new_emoji = PRODUCT_TYPES.get(new_type_name, '📦')
+    
+    msg = f"🔄 Confirm Product Type Reassignment\n\n"
+    msg += f"FROM: {old_emoji} {old_type_name}\n"
+    msg += f"TO: {new_emoji} {new_type_name}\n\n"
+    msg += f"📊 Impact Summary:\n"
+    msg += f"• Products to reassign: {product_count}\n"
+    msg += f"• Reseller discount rules to update: {reseller_discount_count}\n\n"
+    msg += f"⚠️ This action will:\n"
+    msg += f"1. Move all {product_count} products from '{old_type_name}' to '{new_type_name}'\n"
+    msg += f"2. Update {reseller_discount_count} reseller discount rules\n"
+    msg += f"3. Delete the '{old_type_name}' product type completely\n\n"
+    msg += f"🚨 THIS ACTION CANNOT BE UNDONE!"
+    
+    # Store data for confirmation
+    context.user_data['reassign_old_type_name'] = old_type_name
+    context.user_data['reassign_new_type_name'] = new_type_name
+    
+    keyboard = [
+        [InlineKeyboardButton(f"✅ YES, Reassign {product_count} Products", callback_data=f"confirm_yes|confirm_reassign_type|{old_type_name}|{new_type_name}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="adm_reassign_type_start")]
+    ]
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
 # --- Manage Product Types Handlers ---
 async def handle_adm_manage_types(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Shows options to manage product types (edit emoji, delete)."""
@@ -3942,148 +4100,6 @@ async def handle_adm_price_message(update: Update, context: ContextTypes.DEFAULT
         "You can send text, images, videos, GIFs, or a combination.\n"
         "When finished, send any message with the text 'done' to confirm.", 
         parse_mode=None)
-
-async def handle_adm_bulk_execute(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Executes the bulk product creation."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    
-    chat_id = query.message.chat_id
-    bulk_template = context.user_data.get("bulk_template", {})
-    bulk_drops = context.user_data.get("bulk_drops", [])
-    
-    if not bulk_drops or not bulk_template:
-        return await query.edit_message_text("❌ Error: Missing bulk data. Please start again.", parse_mode=None)
-    
-    await query.edit_message_text("⏳ Creating bulk products...", parse_mode=None)
-    
-    p_type = bulk_template.get("product_type", "")
-    size = bulk_template.get("size", "")
-    price = bulk_template.get("price", 0)
-    original_text = bulk_template.get("original_text", "")
-    media_list = bulk_template.get("media", [])
-    
-    created_count = 0
-    failed_count = 0
-    
-    # Create a temporary directory for media if needed
-    temp_dir = None
-    if media_list:
-        import tempfile
-        temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="bulk_media_")
-        
-        # Download media to temp directory
-        for i, media_item in enumerate(media_list):
-            try:
-                file_obj = await context.bot.get_file(media_item["file_id"])
-                file_extension = os.path.splitext(file_obj.file_path)[1] if file_obj.file_path else ""
-                if not file_extension:
-                    if media_item["type"] == "photo": file_extension = ".jpg"
-                    elif media_item["type"] == "video": file_extension = ".mp4"
-                    elif media_item["type"] == "animation": file_extension = ".gif"
-                    else: file_extension = ".bin"
-                
-                temp_file_path = os.path.join(temp_dir, f"media_{i}_{int(time.time())}{file_extension}")
-                await file_obj.download_to_drive(temp_file_path)
-                media_item["path"] = temp_file_path
-            except Exception as e:
-                logger.error(f"Error downloading media for bulk operation: {e}")
-                failed_count += 1
-    
-    # Create products for each location
-    for drop in bulk_drops:
-        city = drop["city"]
-        district = drop["district"]
-        product_name = f"{p_type} {size} {int(time.time())}"
-        
-        conn = None
-        product_id = None
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("BEGIN")
-            
-            insert_params = (
-                city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()
-            )
-            
-            c.execute("""INSERT INTO products
-                            (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
-                         VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""", insert_params)
-            product_id = c.lastrowid
-            
-            # Handle media for this product
-            if product_id and media_list and temp_dir:
-                final_media_dir = os.path.join(MEDIA_DIR, str(product_id))
-                await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True)
-                
-                media_inserts = []
-                for media_item in media_list:
-                    if "path" in media_item and "type" in media_item and "file_id" in media_item:
-                        temp_file_path = media_item["path"]
-                        if await asyncio.to_thread(os.path.exists, temp_file_path):
-                            new_filename = os.path.basename(temp_file_path)
-                            final_persistent_path = os.path.join(final_media_dir, new_filename)
-                            try:
-                                # Copy instead of move so we can reuse for other products
-                                await asyncio.to_thread(shutil.copy2, temp_file_path, final_persistent_path)
-                                media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
-                            except OSError as move_err:
-                                logger.error(f"Error copying media {temp_file_path}: {move_err}")
-                        else:
-                            logger.warning(f"Temp media not found: {temp_file_path}")
-                    else:
-                        logger.warning(f"Incomplete media item: {media_item}")
-                
-                if media_inserts:
-                    c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
-            
-            conn.commit()
-            created_count += 1
-            logger.info(f"Bulk created product {product_id} ({product_name}) in {city}/{district}")
-            
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Error creating bulk product in {city}/{district}: {e}", exc_info=True)
-            if conn:
-                try:
-                    conn.rollback()
-                except Exception as rb_err:
-                    logger.error(f"Rollback failed: {rb_err}")
-        finally:
-            if conn:
-                conn.close()
-    
-    # Clean up temp directory
-    if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
-        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
-        logger.info(f"Cleaned bulk temp dir: {temp_dir}")
-    
-    # Clear bulk data from context
-    keys_to_clear = ["bulk_template", "bulk_drops", "bulk_admin_city_id", "bulk_admin_district_id", 
-                     "bulk_admin_product_type", "bulk_admin_city", "bulk_admin_district", 
-                     "bulk_pending_drop_size", "bulk_pending_drop_price", "state"]
-    for key in keys_to_clear:
-        context.user_data.pop(key, None)
-    
-    # Show results
-    type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
-    result_msg = f"✅ Bulk Operation Complete!\n\n"
-    result_msg += f"{type_emoji} Product: {p_type} {size}\n"
-    result_msg += f"💰 Price: {format_currency(price)}€\n\n"
-    result_msg += f"📊 Results:\n"
-    result_msg += f"✅ Created: {created_count}\n"
-    if failed_count > 0:
-        result_msg += f"❌ Failed: {failed_count}\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("📦 Add More Bulk Products", callback_data="adm_bulk_city")],
-        [InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), 
-         InlineKeyboardButton("🏠 User Home", callback_data="back_start")]
-    ]
-    
-    await send_message_with_retry(context.bot, chat_id, result_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
 
 async def display_user_search_results(bot, chat_id: int, user_info: dict):
     """Displays user overview with buttons to view detailed sections."""
