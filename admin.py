@@ -1119,7 +1119,7 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
     media_type, file_id = None, None
     if update.message.photo: media_type, file_id = "photo", update.message.photo[-1].file_id
     elif update.message.video: media_type, file_id = "video", update.message.video.file_id
-    elif update.message.animation: media_type, file_id = "animation", update.message.animation.file_id
+    elif update.message.animation: media_type, file_id = "gif", update.message.animation.file_id
 
     text = (update.message.caption or update.message.text or "").strip()
 
@@ -4250,7 +4250,7 @@ async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes
                         if not file_extension:
                             if media_item["type"] == "photo": file_extension = ".jpg"
                             elif media_item["type"] == "video": file_extension = ".mp4"
-                            elif media_item["type"] == "animation": file_extension = ".gif"
+                            elif media_item["type"] == "gif": file_extension = ".gif"
                             else: file_extension = ".bin"
                         
                         temp_file_path = os.path.join(temp_dir, f"media_{j}_{int(time.time())}{file_extension}")
