@@ -205,8 +205,8 @@ async def handle_viewer_added_products(update: Update, context: ContextTypes.DEF
                 button_text = f"🖼️ View Media & Text #{prod_id}" if product['media_count'] > 0 else f"📄 View Full Text #{prod_id}"
                 item_buttons.append([InlineKeyboardButton(button_text, callback_data=f"viewer_view_product_media|{prod_id}|{offset}")])
             except Exception as e:
-                 logger.error(f"Error formatting viewer product log item ID {product.get('id', 'N/A')}: {e}")
-                 msg_parts.append(f"\nID {product.get('id', 'N/A')} | (Error displaying item)\n---\n")
+                 logger.error(f"Error formatting viewer product log item ID {product['id'] if product else 'N/A'}: {e}")
+                 msg_parts.append(f"\nID {product['id'] if product else 'N/A'} | (Error displaying item)\n---\n")
         keyboard.extend(item_buttons)
         # Pagination
         total_pages = math.ceil(total_products / PRODUCTS_PER_PAGE_LOG)
